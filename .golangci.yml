@@ -1,0 +1,74 @@
+# golangci-lint configuration.
+#
+# Schema is v2 (golangci-lint 2.x). Verify edits with `golangci-lint config verify`.
+#
+# The gate runs three analysis steps, split so that no check runs twice:
+#
+#   mise run lint          go vet, gofmt
+#   mise run staticcheck   standalone staticcheck: SA, S, ST, U (incl. U1000)
+#   mise run golangci-lint  what neither of the above covers: errcheck, ineffassign
+#
+# Two checks are therefore disabled below not because they are unwanted but
+# because another step already runs them. Duplicate coverage is worse than it
+# sounds: the same finding surfaces twice under two different names, from two
+# independently-versioned analyzers, and when they disagree there is no way to
+# tell which config is authoritative.
+#
+# Known gap, recorded deliberately: staticcheck's QF (quickfix) checks run in
+# neither step. The standalone CLI ships no QF checks at all — they are exposed
+# only through gopls — so golangci-lint's bundled copy is the only way to get
+# them. That is not sufficient reason to run the whole SA/S/ST suite a second
+# time at a second version. QF findings are style suggestions, not correctness.
+version: "2"
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+
+  disable:
+    # Runs standalone via `mise run staticcheck`, pinned in mise.toml to the
+    # upstream release. golangci-lint vendors its own copy at whatever version
+    # it was built against; running both means SA/S/ST execute twice at two
+    # versions. Standalone wins because it tracks staticcheck releases directly.
+    - staticcheck
+
+    # `unused` IS staticcheck's U1000 packaged as a separate golangci linter.
+    # Standalone staticcheck already reports it, so leaving this on emits every
+    # dead symbol twice — once as `U1000`, once as `unused`, same file, same
+    # line.
+    - unused
+
+    # `go vet ./...` already runs as the first step of the gate, before this
+    # one. govet here is the same analyzers a third time.
+    - govet
+
+  settings:
+    errcheck:
+      # Diagnostic and human-facing output written to a writer we own. Go does
+      # not check these returns and there is no sane recovery: reporting that
+      # reporting failed needs the same writer that just failed. 26 call sites
+      # in cmd/agentsync.
+      #
+      # Scoped BY TYPE, not by name. Bare `fmt.Fprintf` would match the
+      # function wherever it appears — including a write to a net.Conn, an
+      # os.Pipe, or an *os.File, where a dropped error genuinely loses data.
+      # The `(io.Writer)` receiver narrows it to the interface-typed calls this
+      # codebase actually makes. errcheck's own defaults already exempt
+      # Fprint*(os.Stderr) and (*bytes.Buffer), so a name-only list would be
+      # suppressing precisely the risky remainder.
+      #
+      # This matters for code not yet written: main.go's package doc notes that
+      # `import` and `link` are still to come, and those write into a project's
+      # .claude/agents/ directory.
+      exclude-functions:
+        - fmt.Fprint(io.Writer)
+        - fmt.Fprintf(io.Writer)
+        - fmt.Fprintln(io.Writer)
+
+issues:
+  # A gate must report everything it found. The defaults (max-issues-per-linter
+  # 50, max-same-issues 3) silently truncate, which turns "fix 3, re-run, find 3
+  # more" into the normal workflow and understates the real count — the 26
+  # errcheck sites above first appeared as 9 for exactly this reason.
+  max-same-issues: 0
+  max-issues-per-linter: 0

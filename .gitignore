@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.bak
+
+# Built binaries
+/agentsync
+cmd/agentsync/agentsync
+
+# Per-checkout state: what this tool did. Names links by absolute path, so it is
+# meaningless in any other clone. See internal/state.
+/.agentsync-state.json

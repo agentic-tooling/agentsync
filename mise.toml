@@ -1,0 +1,158 @@
+# agentsync — toolchain and tasks.
+#
+# This file is both the version pin and the task runner. It replaced a justfile
+# for one reason: `just` shelled out to whatever `go`, `staticcheck`, and
+# `golangci-lint` happened to be on PATH, so the pins in a config file were
+# advisory — they bound only if mise activation was live in that shell. `mise
+# run check` resolves the pinned toolchain itself, so the guarantee travels
+# with the command instead of depending on how the shell was set up.
+#
+# After cloning:  mise trust && mise install
+# List tasks:     mise tasks
+[tools]
+# Matches the `go 1.25` floor in go.mod, resolved to the exact patch the gate is
+# verified against. go.mod states a minimum; this states what we actually build.
+go = "1.25.14"
+
+# Kept in step with .golangci.yml, which uses the v2 schema (golangci-lint 2.x).
+# A major bump here is a config migration, not just a version bump.
+golangci-lint = "2.9.0"
+
+# staticcheck via the github backend, NOT the default aqua backend and NOT
+# `go install`.
+#
+#   - aqua's package resolves to staticcheck_darwin_amd64 even on arm64, so it
+#     runs under Rosetta. Upstream publishes a real staticcheck_darwin_arm64
+#     asset; this backend fetches that one, so the binary is native.
+#   - `go install` would land in GOBIN, which here is mise-managed and contains
+#     the Go version (~/.local/share/mise/installs/go/<ver>/bin) — a helper
+#     installed that way is orphaned by the next Go upgrade. The gate must not
+#     depend on a binary that silently disappears.
+#
+# It pulls the signed upstream release asset rather than recompiling, so this is
+# the same binary dominikh ships and tests, with its attestations and SLSA
+# provenance verified on install.
+#
+# This was `ubi:dominikh/go-tools` until mise deprecated that name: "The ubi
+# backend is deprecated. Use the github backend instead. This will be removed in
+# mise 2027.1.0." It is a rename of the same implementation, not a different
+# one — verified rather than assumed, by installing both and checking: each
+# extracts staticcheck_darwin_arm64.tar.gz and yields a Mach-O arm64 binary. So
+# the Rosetta problem that ruled out aqua stays ruled out.
+"github:dominikh/go-tools" = { version = "2026.2.1", exe = "staticcheck" }
+
+[tasks.build]
+description = "Build the agentsync binary for the current platform"
+run = '''
+# Only the tag is stamped. Commit, build time and dirty state come from the
+# build info the Go toolchain embeds on its own, which -s -w does not strip —
+# stamping those here too would duplicate what Go already recorded, and a
+# duplicate can disagree with the original.
+#
+# --tags --dirty, deliberately without --always: with no tag in reach, describe
+# fails, VERSION is empty, and the binary falls back to the module version Go
+# computed, which is a pseudo-version naming the exact commit and time. --always
+# would instead stamp a bare short SHA and override that richer value with a
+# poorer one. --abbrev=0, which this replaced, was worse still: it reported the
+# nearest tag alone, so a build from a dirty tree twelve commits later claimed
+# to be exactly that tag.
+VERSION=$(git describe --tags --dirty 2>/dev/null || echo "")
+go build -ldflags="-s -w -X main.version=${VERSION}" -o ./agentsync ./cmd/agentsync
+'''
+
+[tasks.run]
+description = "Run agentsync from source (mise run run -- scan --json)"
+run = "go run ./cmd/agentsync"
+
+[tasks.test]
+description = "Run the test suite with the race detector"
+run = "go test -v -race ./..."
+
+[tasks.lint]
+description = "go vet plus gofmt verification (fails on unformatted files)"
+run = '''
+go vet ./...
+# Files come from git, not `gofmt -l .`, which would also lint anything
+# vendored or cached inside the working tree. Keep this block brace-free,
+# comments included: mise runs it through tera templating first.
+UNFORMATTED=$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))
+if [ -n "$UNFORMATTED" ]; then
+    echo "Files not formatted:" >&2
+    echo "$UNFORMATTED" >&2
+    exit 1
+fi
+'''
+
+[tasks.format]
+description = "Rewrite unformatted files in place"
+run = "gofmt -w ."
+
+[tasks.staticcheck]
+description = "Run staticcheck (SA/S/ST check suites)"
+run = "staticcheck ./..."
+
+[tasks.golangci-lint]
+description = "Run golangci-lint (errcheck, ineffassign; see .golangci.yml)"
+run = "golangci-lint run"
+
+[tasks.coverage]
+description = "Report per-package test coverage"
+run = "go test -cover ./..."
+
+[tasks.check]
+description = "Full pre-review gate: lint, build, static analysis, test, race, coverage"
+run = '''
+set -e
+echo "==> lint (go vet + gofmt -l)"
+mise run lint
+echo "==> build (go build ./...)"
+go build ./...
+# Static analysis sits after build and before the test runs. Both tools need
+# the packages to type-check, and `go build` reports a compile error far more
+# legibly than either does; running them before the suite means a lint failure
+# costs one build instead of three test runs (plain, -race, -cover). Each step
+# delegates to its own task so the command lives in exactly one place.
+echo "==> staticcheck (staticcheck ./...)"
+mise run staticcheck
+echo "==> golangci-lint (golangci-lint run)"
+mise run golangci-lint
+echo "==> test (go test ./...)"
+go test ./...
+echo "==> race (go test -race ./...)"
+go test -race ./...
+echo "==> coverage (go test -cover ./...)"
+go test -cover ./...
+echo "==> check passed"
+'''
+
+[tasks.install]
+description = "Build and copy agentsync onto PATH (INSTALL_DIR, default ~/.local/bin)"
+depends = ["build"]
+run = '''
+set -e
+DEST="${INSTALL_DIR:-$HOME/.local/bin}"
+mkdir -p "$DEST"
+cp ./agentsync "$DEST/agentsync"
+# Asked of the binary rather than recomputed from git. The point of the install
+# is to put a binary somewhere it will be run long after this shell is gone, so
+# the line that reports what was installed must come from the artifact itself —
+# a second `git describe` here could describe a tree that has since moved on.
+echo "Installed to $DEST/agentsync"
+"$DEST/agentsync" --version
+'''
+
+[tasks.uninstall]
+description = "Remove the installed agentsync binary"
+run = '''
+DEST="${INSTALL_DIR:-$HOME/.local/bin}"
+if [ -e "$DEST/agentsync" ]; then
+    rm -f "$DEST/agentsync"
+    echo "Removed $DEST/agentsync"
+else
+    echo "Nothing to remove at $DEST/agentsync"
+fi
+'''
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -f ./agentsync"
