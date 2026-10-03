@@ -21,7 +21,7 @@ Or from a clone (installs to `$INSTALL_DIR`, default `~/.local/bin`):
 
 ```bash
 mise trust && mise install
-mise run install
+just install
 ```
 
 ## Configuration
@@ -90,8 +90,12 @@ session: agents are loaded when a session starts.
 
 ```bash
 mise trust && mise install   # once per clone: installs the pinned toolchain
-mise run check               # full gate: vet, gofmt, build, staticcheck, golangci-lint, test, race, coverage
+just check                   # full gate: vet, gofmt, build, staticcheck, golangci-lint, test, race, coverage
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md). Commits follow [Conventional Commits](https://www.conventionalcommits.org/) and the changelog is generated with [git-cliff](https://git-cliff.org/).
 
 ## License
 

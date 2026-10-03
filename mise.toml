@@ -1,14 +1,11 @@
 # agentsync — toolchain and tasks.
 #
-# This file is both the version pin and the task runner. It replaced a justfile
-# for one reason: `just` shelled out to whatever `go`, `staticcheck`, and
-# `golangci-lint` happened to be on PATH, so the pins in a config file were
-# advisory — they bound only if mise activation was live in that shell. `mise
-# run check` resolves the pinned toolchain itself, so the guarantee travels
-# with the command instead of depending on how the shell was set up.
+# This file is both the version pin and where the tasks live. The justfile only
+# delegates here: a recipe that called `go` directly would run whatever is on
+# PATH, leaving the pins advisory.
 #
 # After cloning:  mise trust && mise install
-# List tasks:     mise tasks
+# List tasks:     just (or mise tasks)
 [tools]
 # Matches the `go 1.25` floor in go.mod, resolved to the exact patch the gate is
 # verified against. go.mod states a minimum; this states what we actually build.
@@ -17,6 +14,9 @@ go = "1.25.14"
 # Kept in step with .golangci.yml, which uses the v2 schema (golangci-lint 2.x).
 # A major bump here is a config migration, not just a version bump.
 golangci-lint = "2.9.0"
+
+just = "1.58.0"
+git-cliff = "2.14.2"
 
 # staticcheck via the github backend, NOT the default aqua backend and NOT
 # `go install`.

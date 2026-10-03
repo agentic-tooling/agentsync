@@ -13,12 +13,12 @@ projects as per-file symlinks. `README.md` has the user-facing contract.
 
 ```bash
 mise trust && mise install   # once per clone
-mise run check               # full gate: lint, build, staticcheck, golangci-lint, test, race, coverage
-mise run format              # gofmt -w
-mise run install             # build and put agentsync on PATH
+just check                   # full gate: lint, build, staticcheck, golangci-lint, test, race, coverage
+just format                  # gofmt -w
+just install                 # build from source and put agentsync on PATH
 ```
 
-`mise run check` must pass before asking for review.
+`just check` must pass before asking for review.
 
 ## Rules
 
@@ -38,3 +38,16 @@ mise run install             # build and put agentsync on PATH
   not do its job. Tests assert them; keep them stable.
 - Comments are one to three sentences and say only what the code cannot. No
   issue or PR references in comments.
+
+## Commit Message Format
+
+[Conventional Commits](https://www.conventionalcommits.org/), parsed by git-cliff
+into CHANGELOG.md. Format: `<type>(<scope>): <description>`.
+
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
+`ci`, `chore`. Breaking change: `feat!:` or a `BREAKING CHANGE:` footer.
+
+```bash
+just changelog           # regenerate CHANGELOG.md
+just changelog-preview   # unreleased changes
+```
