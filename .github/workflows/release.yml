@@ -1,0 +1,145 @@
+name: Release
+
+# Same three paths as the other llbbl tools: a push to main tags the next
+# version from Conventional Commit subjects; a pushed v* tag releases that tag;
+# workflow_dispatch back-fills an existing tag. Breaking changes bump minor, not
+# major, so majors are always cut by hand with a pushed tag.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.0.2)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.next }}
+      skip: ${{ steps.version.outputs.skip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: 2026.9.18
+          install: true
+          cache: true
+      - name: Gate
+        run: just check
+        env:
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_GLOBAL: /dev/null
+      - name: Determine next version
+        id: version
+        run: |
+          set -euo pipefail
+          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          IFS='.' read -r major minor patch <<< "${latest#v}"
+          if git rev-parse -q --verify "refs/tags/$latest" >/dev/null; then
+            commits=$(git log "$latest"..HEAD --pretty=format:%s)
+          else
+            commits=$(git log --pretty=format:%s)
+          fi
+          if grep -qE '^feat(\(.+\))?!?:' <<< "$commits"; then
+            minor=$((minor + 1)); patch=0
+          elif grep -qE '^(fix|perf|refactor|chore)(\(.+\))?!?:' <<< "$commits"; then
+            patch=$((patch + 1))
+          else
+            echo "No release-worthy commits since $latest; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "next=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+      - name: Tag and push
+        if: steps.version.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.next }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+  release:
+    needs: version
+    # always() so a skipped version job (tag push, dispatch) does not skip this one.
+    if: |
+      always() && (
+        (needs.version.result == 'success' && needs.version.outputs.skip != 'true') ||
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+        github.event_name == 'workflow_dispatch'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          AUTO_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then tag="$INPUT_TAG"
+          elif [[ "$REF" == refs/tags/* ]]; then tag="$REF_NAME"
+          else tag="$AUTO_TAG"; fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad tag: $tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          version: 2026.9.18
+          install: true
+          cache: true
+      - name: Changelog
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: git cliff --tag "$TAG" --latest -o RELEASE_NOTES.md
+      # Windows is left out: agentsync's job is creating symlinks, which Windows
+      # gates behind developer mode or admin rights.
+      - name: Build archives
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            IFS='/' read -r os arch <<< "$platform"
+            stage="dist/stage-$os-$arch"
+            mkdir -p "$stage"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
+              -ldflags="-s -w -X main.version=$TAG" -o "$stage/agentsync" ./cmd/agentsync
+            cp LICENSE README.md "$stage/"
+            tar czf "dist/agentsync-$TAG-$os-$arch.tar.gz" -C "$stage" .
+            rm -rf "$stage"
+          done
+          ( cd dist && sha256sum *.tar.gz > checksums.txt )
+      - name: Smoke test the linux/amd64 binary
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          tmp=$(mktemp -d)
+          tar xzf "dist/agentsync-$TAG-linux-amd64.tar.gz" -C "$tmp"
+          "$tmp/agentsync" --version | head -1 | grep -Fx "agentsync $TAG"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh release create "$TAG" dist/*.tar.gz dist/checksums.txt --title "$TAG" --notes-file RELEASE_NOTES.md
