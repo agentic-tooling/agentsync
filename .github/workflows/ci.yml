@@ -26,4 +26,11 @@ jobs:
           version: 2026.9.18
           install: true
           cache: true
-      - run: mise run check
+      # The runner's git config sets safe.directory, which disables the
+      # ownership check the dubious-ownership tests rely on. Production probes
+      # inherit the real config, so the gate must see one without it.
+      - run: git config --show-origin --get-all safe.directory || true
+      - run: just check
+        env:
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_CONFIG_GLOBAL: /dev/null
