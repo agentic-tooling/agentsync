@@ -1,15 +1,21 @@
 # agentsync
 
-`agentsync` provisions [Claude Code](https://claude.com/claude-code) agents
-from one canonical agents repository into your projects, as per-file symlinks.
+Every agent Claude Code loads costs context in every session, so a project
+should carry only the agents it needs. Copying agent files between projects
+drifts, and the copies you customized get overwritten or lost.
 
-Keep every agent definition in one git repo (`agents/<name>.md`) and link only
-the agents each project needs into its `.claude/agents/`. Per-file symlinks,
-rather than one directory symlink or a large global tier, keep each project's
-agent set small: every agent Claude Code loads costs context in every session.
-The canonical repo also holds `project-agents/<project-key>/`, a backup of
-agents that exist in one project only, so nothing is lost when a file is
-replaced by a link.
+`agentsync` keeps every agent in one canonical git repo and links only the ones
+each project needs into its `.claude/agents/`, as per-file symlinks. Agents that
+exist in a single project are first captured into the canonical repo, so
+replacing the file with a link loses nothing.
+
+It is built to be safe to run:
+
+- Every command that writes is a dry run until you pass `--apply`.
+- It refuses to link a project holding a file that is backed up nowhere.
+- It removes a symlink only if it recorded creating it and the link is broken,
+  and deletes a captured file only if git still holds its bytes.
+- Anything it cannot determine is a refusal with exit 2, never a guessed default.
 
 ## Install
 
@@ -24,33 +30,22 @@ mise trust && mise install
 just install
 ```
 
-## Configuration
-
-agentsync does not guess where your trees live. Both settings are required
-where they apply, and a run that needs one that is unset refuses with exit 2.
-
-| Setting | Flag | Environment | Used for |
-|---|---|---|---|
-| Canonical agents repo | `--repo PATH` | `$AGENTSYNC_REPO` | every command |
-| Default tree of projects | `--root PATH` | `$AGENTSYNC_ROOT` | `--all`, `inventory`, and runs outside any project |
+## Quick start
 
 ```bash
-export AGENTSYNC_REPO="$HOME/src/my-agents"
-export AGENTSYNC_ROOT="$HOME/src"
+export AGENTSYNC_REPO="$HOME/src/my-agents"   # your canonical agents repo
+export AGENTSYNC_ROOT="$HOME/src"             # the tree holding your projects
+
+cd ~/src/api
+agentsync scan --at-risk                      # files protected nowhere else
+agentsync import --apply                      # back them up into the repo
+agentsync link --agent go-reviewer --apply    # link one agent into this project
+agentsync doctor                              # what has drifted
 ```
 
-Run inside a project, the scan root is that project: agentsync walks up from
-the working directory, stopping before `$HOME`, and takes the first directory
-holding `.claude/agents/`, else `.claude/`, else `.git/`. If none is found it
-falls back to `$AGENTSYNC_ROOT`. `--all` scans `$AGENTSYNC_ROOT` explicitly and
-is refused together with `--root`. Every run prints the root it chose and why.
-
-`inventory` never derives a root from the working directory: it describes the
-whole tree, so it uses `--root` or `$AGENTSYNC_ROOT`.
+Run without `--apply` first to see what a command would do.
 
 ## Commands
-
-Every command that writes is a dry run by default; `--apply` writes. The exception is `inventory`, which only ever rewrites its own derived file.
 
 | Command | Does |
 |---|---|
@@ -61,41 +56,25 @@ Every command that writes is a dry run by default; `--apply` writes. The excepti
 | `reconcile` | act on that drift, gated on what agentsync itself recorded |
 | `inventory` | regenerate `inventory.json`, a record of every agent on the machine |
 
-```bash
-agentsync scan                                  # the project you are in
-agentsync scan --all --at-risk                  # files protected nowhere else
-agentsync import --apply                        # back up project-only agents
-agentsync link --agent go-reviewer --apply      # link one agent into this project
-agentsync doctor                                # what has drifted
-agentsync reconcile --prune --apply             # remove broken links agentsync created
-agentsync inventory --check                     # exit 1 if inventory.json is stale
-```
-
-Links agentsync creates are recorded in `.agentsync-state.json` at the root of
-the canonical repo. It names links by absolute path, so keep it out of git.
-After a run that creates or removes a symlink, restart your Claude Code
-session: agents are loaded when a session starts.
-
 `agentsync help` lists every flag.
 
-## Exit codes
+## Documentation
 
-| Code | Meaning |
-|---|---|
-| `0` | clean |
-| `1` | the run completed and found something a human must settle |
-| `2` | agentsync could not do its job (bad flags, missing config, unreadable path) |
-
-## Development
-
-```bash
-mise trust && mise install   # once per clone: installs the pinned toolchain
-just check                   # full gate: vet, gofmt, build, staticcheck, golangci-lint, test, race, coverage
-```
+- [Configuration](docs/configuration.md): repo and root settings, which tree is scanned, the home guard
+- [scan](docs/scan.md)
+- [import](docs/import.md)
+- [link](docs/link.md)
+- [doctor](docs/doctor.md)
+- [reconcile](docs/reconcile.md)
+- [inventory](docs/inventory.md)
+- [State file](docs/state-file.md)
+- [Exit codes](docs/exit-codes.md)
+- [Development](docs/development.md): toolchain, CI, releases
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md). Commits follow [Conventional Commits](https://www.conventionalcommits.org/) and the changelog is generated with [git-cliff](https://git-cliff.org/).
+Generated from Conventional Commits with git-cliff; see `just changelog-preview`
+and [development](docs/development.md#changelog).
 
 ## License
 
