@@ -17,3 +17,19 @@ cmd/agentsync/agentsync
 # Per-checkout state: what this tool did. Names links by absolute path, so it is
 # meaningless in any other clone. See internal/state.
 /.agentsync-state.json
+
+# Local-only assistant context and configuration; never commit these.
+_/
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+.claude/
+.codex/
+.opencode/
+.agents/
+.factory/
+/.mcp.json
+/opencode.json
+/opencode.jsonc
