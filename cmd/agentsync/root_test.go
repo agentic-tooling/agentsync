@@ -112,9 +112,7 @@ func TestDetectProject_OutsideHomeStillWalks(t *testing.T) {
 // TestDetectProject_UnreadableDirectoryRefuses is the fail-closed rule.
 //
 // "Could not look" is not "nothing here". Reading it as a clean negative would
-// ascend past the project and land on the machine-wide tree — turning one
-// unreadable directory into a scan of everything, which is the wrong direction
-// for a mistake to fall in.
+// ascend past the project and select whatever project encloses it.
 func TestDetectProject_UnreadableDirectoryRefuses(t *testing.T) {
 	home := t.TempDir()
 	unreadable, _ := testfs.UnreadableSubtree(t, home)
@@ -134,8 +132,8 @@ func TestDetectProject_UnreadableDirectoryRefuses(t *testing.T) {
 // os.Getwd can succeed with a path that is no longer there — macOS reports the
 // stale path from still-referenced vnodes — and every stat beneath it then
 // returns ENOENT, which is a real "nothing here". The walk would ascend through
-// all of it and land on the machine-wide tree. resolveDir is where that has to
-// be caught, because it is the last point at which the two are distinguishable.
+// all of it to an enclosing project. resolveDir is where that has to be caught,
+// because it is the last point at which the two are distinguishable.
 func TestDetectProject_UnresolvableCwdRefuses(t *testing.T) {
 	home := t.TempDir()
 	gone := filepath.Join(home, "Web", "gone", "sub")
@@ -158,8 +156,8 @@ func TestResolveDir(t *testing.T) {
 	if got := mustResolveDir(t, dir); !filepath.IsAbs(got) {
 		t.Errorf("resolveDir(%q) = %q, want an absolute path", dir, got)
 	}
-	// Degrading to the unresolved path here is what widened the scan; the
-	// error is the whole point of this function differing from scan's.
+	// Degrading here would read a deleted working directory as having no
+	// markers and climb past it.
 	if _, err := resolveDir(filepath.Join(dir, "not-there")); err == nil {
 		t.Error("a path that does not resolve came back without an error")
 	}
@@ -193,11 +191,20 @@ func TestRootFlags_Resolve(t *testing.T) {
 		// filepath.Abs("") is the working directory, so honouring an empty
 		// value would scan somewhere the user never named.
 		got, err := resolveWith(t, home, "  ", false)
-		if err != nil {
-			t.Fatalf("resolve: %v", err)
+		if err == nil || !strings.Contains(err.Error(), "no project found") {
+			t.Errorf("resolve = %+v, %v; want the no-project refusal", got, err)
 		}
-		if got.Origin != rootFromDefault || got.Path != wide {
-			t.Errorf("resolve = %+v, want the default tree", got)
+	})
+
+	t.Run("no project marker refuses rather than widening", func(t *testing.T) {
+		got, err := resolveWith(t, home, "", false)
+		if err == nil {
+			t.Fatalf("resolve = %+v, want a refusal: a markerless directory widened to the whole tree", got)
+		}
+		for _, w := range []string{"no project found", "--" + allFlag, "--root"} {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("refusal does not name %q:\n%v", w, err)
+			}
 		}
 	})
 
@@ -228,13 +235,11 @@ func TestRootFlags_Resolve(t *testing.T) {
 		}
 	})
 
-	t.Run("no default tree refuses the fallback and --all", func(t *testing.T) {
+	t.Run("no default tree refuses --all", func(t *testing.T) {
 		t.Setenv(envRoot, "")
-		for _, all := range []bool{false, true} {
-			_, err := resolveWith(t, home, "", all)
-			if err == nil || !strings.Contains(err.Error(), "$"+envRoot) || !strings.Contains(err.Error(), "--root") {
-				t.Errorf("all=%v: err = %v, want a refusal naming --root and $%s", all, err, envRoot)
-			}
+		_, err := resolveWith(t, home, "", true)
+		if err == nil || !strings.Contains(err.Error(), "$"+envRoot) || !strings.Contains(err.Error(), "--root") {
+			t.Errorf("err = %v, want a refusal naming --root and $%s", err, envRoot)
 		}
 	})
 }
@@ -388,11 +393,6 @@ func TestEmitRootChoice(t *testing.T) {
 			want:   []string{"~/Web", "--all"},
 		},
 		{
-			name:   "fallback says so and offers to narrow",
-			choice: rootChoice{Path: "/home/u/Web", Origin: rootFromDefault},
-			want:   []string{"~/Web", "no project was found", "--root"},
-		},
-		{
 			name:    "wide default says it never narrows",
 			choice:  rootChoice{Path: "/home/u/Web", Origin: rootFromWide},
 			want:    []string{"~/Web", "whole machine", "never narrows"},
@@ -537,9 +537,29 @@ func TestRunScan_RootFollowsTheWorkingDirectory(t *testing.T) {
 		}
 	})
 
-	t.Run("from the default tree still scans everything", func(t *testing.T) {
+	// A new project has no marker yet; widening from it would scan every
+	// project on the machine, so every deriving command refuses before scanning.
+	t.Run("outside any project refuses rather than widening", func(t *testing.T) {
 		t.Chdir(filepath.Join(home, "Web"))
-		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot, "--json")
+		for _, args := range [][]string{
+			{"scan"}, {"import"}, {"link", "--agent", "shared"}, {"doctor"}, {"reconcile"},
+		} {
+			code, stdout, stderr := runCLI(t, append(args, "--repo", repoRoot)...)
+			if code != exitFailure {
+				t.Errorf("%s: exit = %d, want %d\n%s\n%s", args[0], code, exitFailure, stdout, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("%s: a refused run must not emit a report:\n%s", args[0], stdout)
+			}
+			if !strings.Contains(stderr, "no project found") || !strings.Contains(stderr, "--"+allFlag) {
+				t.Errorf("%s: the refusal does not say why or name --%s:\n%s", args[0], allFlag, stderr)
+			}
+		}
+	})
+
+	t.Run("--all from outside any project scans everything", func(t *testing.T) {
+		t.Chdir(filepath.Join(home, "Web"))
+		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot, "--json", "--"+allFlag)
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s", code, exitOK, stderr)
 		}
@@ -689,14 +709,14 @@ func TestRunLink_DerivedRootImpliesProject(t *testing.T) {
 }
 
 // TestRunLink_WideRootStillRefusesAgentWithoutProject: filling --project in
-// from a derived root must not have loosened the rule. Standing in the default
-// tree selects no project, so naming an agent is refused exactly as before.
+// from a derived root must not have loosened the rule. --all selects no
+// project, so naming an agent is refused exactly as before.
 func TestRunLink_WideRootStillRefusesAgentWithoutProject(t *testing.T) {
 	home, repoRoot := projectScopeFixture(t)
 	globalAgent(t, repoRoot, "shared", "canonical\n")
 	t.Chdir(filepath.Join(home, "Web"))
 
-	code, stdout, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply")
+	code, stdout, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply", "--"+allFlag)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d: --agent with no project selected must be refused", code, exitFailure)
 	}
@@ -843,21 +863,18 @@ func TestRunReconcile_RekeyDoesNotAskForARestart(t *testing.T) {
 	}
 }
 
-// TestRun_RootDerivationRefusalsReachTheExitCode is the guard at the layer the
-// refusal actually has to hold: resolve must propagate what the walk refused,
-// not fall back to the machine-wide tree.
-//
-// Both cases exit 2 through resolve, and each covers a different arm of it. A
-// unit test on detectProject alone does not: making resolve swallow that error
-// and return the wide root leaves every such test passing.
+// TestRun_RootDerivationRefusalsReachTheExitCode checks that resolve reports the
+// walk's own error rather than "no project found", which also exits 2. Each case
+// asserts the "could not" wording, since exit 2 alone cannot tell them apart.
 func TestRun_RootDerivationRefusalsReachTheExitCode(t *testing.T) {
-	// A marker that can be neither read nor ruled out. Two symlinks pointing
-	// at each other make os.Stat return ELOOP, which is not fs.ErrNotExist —
-	// so this is "could not look", deterministically, on every platform and
-	// as root, which chmod 000 is not.
+	// Two symlinks pointing at each other make os.Stat return ELOOP, which is
+	// not fs.ErrNotExist, on every platform and as root, which chmod 000 is not.
+	// The enclosing .git makes a swallowed error climb to a project and exit 0.
 	t.Run("a marker that cannot be looked at", func(t *testing.T) {
 		home, repoRoot := projectScopeFixture(t)
-		dir := filepath.Join(home, "Web", "loop")
+		enclosing := filepath.Join(home, "Web", "outer")
+		mustMkdirT(t, filepath.Join(enclosing, ".git"))
+		dir := filepath.Join(enclosing, "loop")
 		mustMkdirT(t, dir)
 		loop, other := filepath.Join(dir, ".claude"), filepath.Join(dir, ".claude-other")
 		if err := os.Symlink(other, loop); err != nil {
@@ -873,21 +890,17 @@ func TestRun_RootDerivationRefusalsReachTheExitCode(t *testing.T) {
 		t.Chdir(dir)
 		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot)
 		if code != exitFailure {
-			t.Errorf("exit = %d, want %d: an unreadable marker must refuse, not widen to the whole machine\n%s\n%s",
+			t.Errorf("exit = %d, want %d: an unreadable marker must refuse, not climb to the enclosing project\n%s\n%s",
 				code, exitFailure, stdout, stderr)
 		}
 		if strings.Contains(stdout, "Root:") {
 			t.Errorf("a refused run named a root it never settled on:\n%s", stdout)
 		}
-		if !strings.Contains(stderr, "--"+allFlag) {
-			t.Errorf("the refusal does not name a way out:\n%s", stderr)
-		}
+		assertWalkRefusal(t, stderr)
 	})
 
-	// The reported case: cd into a directory, delete it, and os.Getwd still
-	// hands back the path. Whichever of the two guards fires first — Getwd
-	// failing, or resolveDir failing on the stale path — the answer is the
-	// same, and it is never the machine-wide tree.
+	// cd into a directory, delete it, and os.Getwd may still hand back the path.
+	// Getwd failing and resolveDir failing on the stale path both say "could not".
 	t.Run("a working directory that was deleted underneath us", func(t *testing.T) {
 		home, repoRoot := projectScopeFixture(t)
 		gone := filepath.Join(home, "Web", "gone", "sub")
@@ -900,12 +913,13 @@ func TestRun_RootDerivationRefusalsReachTheExitCode(t *testing.T) {
 
 		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot)
 		if code != exitFailure {
-			t.Errorf("exit = %d, want %d: a deleted working directory must refuse, not widen to the whole machine\n%s\n%s",
+			t.Errorf("exit = %d, want %d: a deleted working directory must refuse\n%s\n%s",
 				code, exitFailure, stdout, stderr)
 		}
 		if strings.Contains(stdout, "Root:") {
 			t.Errorf("a refused run named a root it never settled on:\n%s", stdout)
 		}
+		assertWalkRefusal(t, stderr)
 	})
 }
 
@@ -918,7 +932,7 @@ func TestRunLink_AgentRefusalNamesTheRoot(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", "canonical\n")
 	t.Chdir(filepath.Join(home, "Web"))
 
-	code, _, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply")
+	code, _, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply", "--"+allFlag)
 	if code != exitFailure {
 		t.Fatalf("exit = %d, want %d", code, exitFailure)
 	}
@@ -933,5 +947,17 @@ func TestRunLink_AgentRefusalNamesTheRoot(t *testing.T) {
 	_, _, stderr = runCLI(t, "link", "--repo", repoRoot, "--project", "Web/alpha", "--agent", "../escape")
 	if strings.Contains(stderr, "selects no project") {
 		t.Errorf("the root hint fired on an unrelated refusal:\n%s", stderr)
+	}
+}
+
+// assertWalkRefusal fails unless stderr carries the walk's own error, not the
+// no-project refusal that shares its exit code.
+func assertWalkRefusal(t *testing.T, stderr string) {
+	t.Helper()
+	if strings.Contains(stderr, "no project found") || !strings.Contains(stderr, "could not") {
+		t.Errorf("the walk's error was replaced by a different refusal:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "--"+allFlag) {
+		t.Errorf("the refusal does not name a way out:\n%s", stderr)
 	}
 }

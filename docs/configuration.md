@@ -6,7 +6,7 @@ is unset refuses with exit 2.
 | Setting | Flag | Environment | Used for |
 |---|---|---|---|
 | Canonical agents repo | `--repo PATH` | `$AGENTSYNC_REPO` | every command |
-| Default tree of projects | `--root PATH` | `$AGENTSYNC_ROOT` | `--all`, `inventory`, and runs outside any project |
+| Default tree of projects | `--root PATH` | `$AGENTSYNC_ROOT` | `--all` and `inventory` |
 
 ```bash
 export AGENTSYNC_REPO="$HOME/src/my-agents"
@@ -31,10 +31,12 @@ repository resolves to that subdirectory, not the repository root. A project
 with `.claude/` and no `agents/` yet resolves too, so `link --apply` can
 provision its first agent.
 
-If nothing is found before `$HOME`, the root falls back to `$AGENTSYNC_ROOT`,
-and the run is refused if that is unset. A working directory that cannot be
-determined or resolved, or an ancestor that cannot be read, also refuses with
-exit 2 rather than widening to the whole tree.
+If nothing is found before `$HOME`, the run is refused with exit 2 and nothing
+is scanned: a new project with no markers yet would otherwise widen to every
+project on the machine. Run inside a project, create its `.claude/agents/`, or
+pass `--all` or `--root PATH`. A working directory that cannot be determined or
+resolved, or an ancestor that cannot be read, also refuses with exit 2 rather
+than widening to the whole tree.
 
 - `--root PATH` names a tree explicitly and switches the derivation off.
 - `--all` scans `$AGENTSYNC_ROOT`, the machine-wide view. It is refused

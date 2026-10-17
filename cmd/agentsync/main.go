@@ -65,8 +65,8 @@ Common flags:
                     below $HOME holding .claude/agents/, else .claude/, else
                     .git/ — so running inside a project means that project, and
                     for link it also selects that project as if --project had
-                    named it. Nothing found before $HOME falls back to
-                    $AGENTSYNC_ROOT, and is refused when that is unset.
+                    named it. Nothing found before $HOME is refused rather
+                    than widened: pass --all or --root to scan from there.
                     Every run prints the root it chose and how it decided.
   --all             scan $AGENTSYNC_ROOT, the whole default tree, rather than the project
                     the working directory is in. Refused together with --root:
