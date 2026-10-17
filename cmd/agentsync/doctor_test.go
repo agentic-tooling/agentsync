@@ -363,11 +363,6 @@ func TestRunDoctor_ImplausibleHomeWarnsRatherThanFails(t *testing.T) {
 // is not the one those projects live under. Without a second signal the run
 // reports every capture in the repo as belonging to a deleted project, with the
 // summary pointing at rm and $HOME mentioned nowhere.
-//
-// A wrong $HOME tends to PRODUCE this shape rather than merely coincide with
-// it: the derived root falls back to $HOME/Web and the walk that derives it
-// stops at $HOME, so the same mistake that misplaces the home also empties the
-// root that would otherwise supply the evidence.
 func TestRunDoctor_CapturesWarnAboutHomeEvenWhenNoProjectWasScanned(t *testing.T) {
 	_, repoRoot := doctorFixture(t)
 

@@ -37,7 +37,6 @@ const (
 	rootFromFlag    // an explicit --root
 	rootFromAll     // an explicit --all
 	rootFromProject // the project the cwd is in; the one origin implying a project
-	rootFromDefault // the fallback: nothing found between the cwd and $HOME
 	rootFromWide    // the default of a command that never derives one; see resolveWide
 )
 
@@ -64,7 +63,7 @@ type rootFlags struct {
 func registerRoot(fs *flag.FlagSet) rootFlags {
 	return rootFlags{
 		root: fs.String("root", "",
-			"directory tree to scan (default: the project the working directory is in, else $"+envRoot+")"),
+			"directory tree to scan (default: the project the working directory is in)"),
 		all: fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+") instead of the project you are in"),
 	}
 }
@@ -157,12 +156,10 @@ func (f rootFlags) resolve(home string) (rootChoice, error) {
 	if err != nil {
 		return rootChoice{}, err
 	}
+	// A new project has no marker yet, and widening to the whole tree from there
+	// would scan every project on the machine; --all is the explicit way to ask.
 	if dir == "" {
-		p, err := wideRoot()
-		if err != nil {
-			return rootChoice{}, fmt.Errorf("no project found between the working directory and your home directory, and %w", err)
-		}
-		return rootChoice{Path: p, Origin: rootFromDefault}, nil
+		return rootChoice{}, fmt.Errorf("no project found above the working directory, so nothing was scanned; run inside a project or create its .claude/agents/, or pass --%s to scan the whole tree ($%s) or --root PATH", allFlag, envRoot)
 	}
 	return rootChoice{
 		Path:    dir,
@@ -180,9 +177,8 @@ func (f rootFlags) resolve(home string) (rootChoice, error) {
 // is the wide run, which --all names. A cwd outside $HOME still gets a walk —
 // "never above $HOME" forbids escaping home, not a tree never inside it.
 //
-// Every error is a refusal. The only silent alternative is the machine-wide
-// tree, so anything unreadable would widen the scan far past what was asked
-// for — the wrong direction for a mistake to fall in.
+// Every error is a refusal: reading an unreadable level as "nothing here" would
+// ascend past the project to whatever encloses it.
 func detectProject(home, cwd string) (dir, marker string, err error) {
 	// One of them: os.Getwd can hand back a path that is no longer there, and
 	// a walk from it finds nothing at every level and calls that a clean result.
@@ -252,12 +248,11 @@ func statMarker(path string) (os.FileInfo, error) {
 // resolveDir makes a path absolute and follows symlinks, so the walk's stop
 // test compares like with like against an already-resolved home.
 //
-// It returns the error where scan.resolvePath degrades to the unresolved path.
-// That asymmetry is deliberate, not an inconsistency to tidy away: keying must
-// always produce an answer, while deciding a scan root may decline. Degrading
-// here is what let a deleted working directory widen to the whole machine —
-// os.Getwd hands back the stale path, and every stat beneath it then answers a
-// clean ENOENT that the walk reads as "nothing here".
+// It returns the error where scan.resolvePath degrades to the unresolved path,
+// because keying must always produce an answer while deciding a scan root may
+// decline. Degrading
+// here would read a deleted working directory, whose stats all answer ENOENT,
+// as having no markers and climb past it.
 func resolveDir(p string) (string, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
@@ -283,8 +278,6 @@ func emitRootChoice(w io.Writer, home string, c rootChoice) {
 			shown, c.marker, allFlag)
 	case rootFromAll:
 		fmt.Fprintf(w, "Root: %s (from --%s: the whole default tree, $%s).\n", shown, allFlag, envRoot)
-	case rootFromDefault:
-		fmt.Fprintf(w, "Root: %s (the default tree, $%s: no project was found between the current directory and your home directory) — pass --root PATH to narrow.\n", shown, envRoot)
 	case rootFromWide:
 		fmt.Fprintf(w, "Root: %s (the default tree, $%s: this command always describes the whole machine and never narrows to the project you are in).\n", shown, envRoot)
 	}
