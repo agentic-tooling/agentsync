@@ -99,6 +99,10 @@ run = "golangci-lint run"
 description = "Report per-package test coverage"
 run = "go test -cover ./..."
 
+[tasks.coverage-floor]
+description = "Fail if any package's coverage is below its floor in coverage-floors.txt"
+run = "sh ./scripts/coverage-floor.sh"
+
 [tasks.check]
 description = "Full pre-review gate: lint, build, static analysis, test, race, coverage"
 run = '''
@@ -120,8 +124,8 @@ echo "==> test (go test ./...)"
 go test ./...
 echo "==> race (go test -race ./...)"
 go test -race ./...
-echo "==> coverage (go test -cover ./...)"
-go test -cover ./...
+echo "==> coverage floors (scripts/coverage-floor.sh)"
+mise run coverage-floor
 echo "==> check passed"
 '''
 

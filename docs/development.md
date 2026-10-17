@@ -23,9 +23,19 @@ just uninstall
 
 `just check` runs, in order: `go vet` and `gofmt` verification (`lint` fails on
 unformatted files), `go build`, `staticcheck`, `golangci-lint`, `go test`,
-`go test -race`, and per-package coverage. It stops at the first failure. The
-static-analysis steps run after the build because both need the packages to
-type-check.
+`go test -race`, and per-package coverage floors. It stops at the first
+failure. The static-analysis steps run after the build because both need the
+packages to type-check.
+
+The coverage step (`scripts/coverage-floor.sh`) enforces a floor per package
+from `coverage-floors.txt`. It fails when a package drops below its floor, when
+a package has no floor, or when a floor names a package that no longer exists.
+A package without tests needs an explicit floor of `0`. `just coverage` prints
+the plain report.
+
+Floors only go up. After a coverage pass, set the package's floor to the new
+verified number. Coverage differs slightly between macOS and Linux, so use the
+lower of the local and CI numbers.
 
 Analysis work is split so no check runs twice:
 
