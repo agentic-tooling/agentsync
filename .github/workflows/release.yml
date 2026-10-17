@@ -1,9 +1,10 @@
 name: Release
 
 # Same three paths as the other llbbl tools: a push to main tags the next
-# version from Conventional Commit subjects; a pushed v* tag releases that tag;
-# workflow_dispatch back-fills an existing tag. Breaking changes bump minor, not
-# major, so majors are always cut by hand with a pushed tag.
+# version from Conventional Commit messages; a pushed v* tag releases that tag;
+# workflow_dispatch back-fills an existing tag. scripts/release-policy decides
+# the bump, rejects breaking-change markers, and this workflow refuses any tag at
+# v1.0.0 or above.
 
 on:
   push:
@@ -48,21 +49,17 @@ jobs:
         run: |
           set -euo pipefail
           latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          IFS='.' read -r major minor patch <<< "${latest#v}"
           if git rev-parse -q --verify "refs/tags/$latest" >/dev/null; then
-            commits=$(git log "$latest"..HEAD --pretty=format:%s)
+            range="$latest..HEAD"
           else
-            commits=$(git log --pretty=format:%s)
+            range=HEAD
           fi
-          if grep -qE '^feat(\(.+\))?!?:' <<< "$commits"; then
-            minor=$((minor + 1)); patch=0
-          elif grep -qE '^(fix|perf|refactor|chore)(\(.+\))?!?:' <<< "$commits"; then
-            patch=$((patch + 1))
-          else
+          next=$(git log "$range" -z --format=%B | go run ./scripts/release-policy next-version --latest "$latest")
+          if [ -z "$next" ]; then
             echo "No release-worthy commits since $latest; skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          echo "next=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
       - name: Tag and push
         if: steps.version.outputs.skip != 'true'
@@ -97,7 +94,9 @@ jobs:
           if [ "$EVENT" = "workflow_dispatch" ]; then tag="$INPUT_TAG"
           elif [[ "$REF" == refs/tags/* ]]; then tag="$REF_NAME"
           else tag="$AUTO_TAG"; fi
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad tag: $tag"; exit 1; }
+          # Same rule as the check-tag step, applied before the tag's tree is
+          # checked out; check-tag needs that tree and its toolchain to run.
+          [[ "$tag" =~ ^v0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "::error::bad tag (only v0.Y.Z releases): $tag"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,6 +107,10 @@ jobs:
           version: 2026.9.18
           install: true
           cache: true
+      - name: Check tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: go run ./scripts/release-policy check-tag "$TAG"
       - name: Changelog
         env:
           TAG: ${{ steps.tag.outputs.tag }}
@@ -130,7 +133,7 @@ jobs:
             tar czf "dist/agentsync-$TAG-$os-$arch.tar.gz" -C "$stage" .
             rm -rf "$stage"
           done
-          ( cd dist && sha256sum *.tar.gz > checksums.txt )
+          ( cd dist && sha256sum -- *.tar.gz > checksums.txt )
       - name: Smoke test the linux/amd64 binary
         env:
           TAG: ${{ steps.tag.outputs.tag }}
