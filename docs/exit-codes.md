@@ -17,6 +17,7 @@ What counts as exit 1, by command:
 | `doctor` | a broken or mismatched link, a stale capture, an orphaned capture directory, or an unreadable path |
 | `reconcile` | a refused selector, a conflict, a diverged or dereferenced link, or a removable link left in place |
 | `inventory --check` | the file is stale or absent |
+| `optimize` | an agent's advice is unresolved, or it was skipped by the cost cap or a stopped run |
 
 `doctor`'s exit code is the one that asserts nothing has drifted; `reconcile`'s
 is deliberately narrower (see [reconcile](reconcile.md)). Tests assert these

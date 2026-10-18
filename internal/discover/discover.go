@@ -124,7 +124,7 @@ func agentCount(dir string) (int, error) {
 		if err == nil && e.Type().IsRegular() && filepath.Ext(e.Name()) == ".md" {
 			var data []byte
 			data, err = os.ReadFile(filepath.Join(dir, "agents", e.Name()))
-			if err == nil && isAgent(string(data)) {
+			if err == nil && IsAgent(string(data)) {
 				n++
 			}
 		}
@@ -132,21 +132,36 @@ func agentCount(dir string) (int, error) {
 	return n, err
 }
 
-// isAgent reports whether s opens with YAML frontmatter carrying top-level
+// IsAgent reports whether s opens with YAML frontmatter carrying top-level
 // name and description keys, which is what Claude Code requires of an agent.
-func isAgent(s string) bool {
+func IsAgent(s string) bool {
+	fm, ok := Frontmatter(s)
+	_, name := fm["name"]
+	_, desc := fm["description"]
+	return ok && name && desc
+}
+
+// Frontmatter returns the top-level keys of s's YAML frontmatter with their
+// raw values trimmed, and false when s has none. Nested and list lines are
+// skipped; the first occurrence of a key wins.
+func Frontmatter(s string) (map[string]string, bool) {
 	front, ok := strings.CutPrefix(strings.ReplaceAll(s, "\r\n", "\n"), "---\n")
 	if !ok {
-		return false
+		return nil, false
 	}
 	front, _, ok = strings.Cut(front, "\n---")
 	if !ok {
-		return false
+		return nil, false
 	}
-	var name, desc bool
+	fm := map[string]string{}
 	for _, line := range strings.Split(front, "\n") {
-		name = name || strings.HasPrefix(line, "name:")
-		desc = desc || strings.HasPrefix(line, "description:")
+		key, value, found := strings.Cut(line, ":")
+		if !found || key == "" || strings.ContainsAny(key[:1], " \t-#") {
+			continue
+		}
+		if _, dup := fm[key]; !dup {
+			fm[key] = strings.TrimSpace(value)
+		}
 	}
-	return name && desc
+	return fm, true
 }

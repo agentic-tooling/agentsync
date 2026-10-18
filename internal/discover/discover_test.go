@@ -284,13 +284,25 @@ func TestFind_StopsAtTheLimit(t *testing.T) {
 
 func TestIsAgent(t *testing.T) {
 	for _, s := range []string{agentMD, "---\ndescription: d\nname: n\n---"} {
-		if !isAgent(s) {
-			t.Errorf("isAgent(%q) = false", s)
+		if !IsAgent(s) {
+			t.Errorf("IsAgent(%q) = false", s)
 		}
 	}
 	for _, s := range []string{"", "---\n", "---\nname: n\n---\n", " ---\nname: n\ndescription: d\n---\n"} {
-		if isAgent(s) {
-			t.Errorf("isAgent(%q) = true", s)
+		if IsAgent(s) {
+			t.Errorf("IsAgent(%q) = true", s)
 		}
+	}
+}
+
+func TestFrontmatter(t *testing.T) {
+	s := "---\r\nname: n\r\nmodel:  opus \r\nmodel: sonnet\r\n  effort: max\r\n- effort: low\r\n# effort: low\r\n: x\r\ncolor\r\neffort:\r\ntools: Read # and Grep\r\n---\r\nmodel: haiku\r\n"
+	fm, ok := Frontmatter(s)
+	want := map[string]string{"name": "n", "model": "opus", "effort": "", "tools": "Read # and Grep"}
+	if !ok || !reflect.DeepEqual(fm, want) {
+		t.Errorf("Frontmatter = %v, %v; want %v, true", fm, ok, want)
+	}
+	if _, ok := Frontmatter("model: opus\n"); ok {
+		t.Error("Frontmatter found frontmatter in a file without any")
 	}
 }

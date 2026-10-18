@@ -1,0 +1,76 @@
+{
+  "data": [
+    {
+      "id": "typesafe/jev-1.14",
+      "name": "TypeSafe: Jev 1.14",
+      "pricing": {
+        "prompt": "0.000000042",
+        "completion": "0"
+      }
+    },
+    {
+      "id": "anthropic/claude-haiku-5.5",
+      "name": "Anthropic: Claude Haiku 5.5",
+      "pricing": {
+        "prompt": "0.0000001",
+        "completion": "0.0000005"
+      }
+    },
+    {
+      "id": "cloudflare/clef",
+      "name": "Cloudflare: Clef",
+      "pricing": {
+        "prompt": "0.000000042",
+        "completion": "0"
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5.5",
+      "name": "Anthropic: Claude Sonnet 5.5",
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001"
+      }
+    },
+    {
+      "id": "typesafe/jev-router",
+      "name": "TypeSafe: Jev Router",
+      "pricing": {
+        "prompt": "-1",
+        "completion": "-1"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5.5",
+      "name": "Anthropic: Claude Opus 5.5",
+      "pricing": {
+        "prompt": "0.000004",
+        "completion": "0.00002"
+      }
+    },
+    {
+      "id": "~typesafe/jev-latest",
+      "name": "TypeSafe: Jev Latest",
+      "pricing": {
+        "prompt": "0.000000042",
+        "completion": "0"
+      }
+    },
+    {
+      "id": "anthropic/claude-fable-5.1",
+      "name": "Anthropic: Claude Fable 5.1",
+      "pricing": {
+        "prompt": "0.00001",
+        "completion": "0.00005"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4.8",
+      "name": "Anthropic: Claude Opus 4.8",
+      "pricing": {
+        "prompt": "0.000005",
+        "completion": "0.000025"
+      }
+    }
+  ]
+}
