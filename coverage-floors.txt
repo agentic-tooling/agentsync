@@ -1,7 +1,8 @@
 # Minimum per-package statement coverage, checked by `just check`.
 # Raise a floor after a coverage pass; never lower one.
-cmd/agentsync 89.9
+cmd/agentsync 91.2
 internal/config 100.0
+internal/discover 100.0
 internal/doctor 88.1
 internal/importer 88.8
 internal/inventory 91.2

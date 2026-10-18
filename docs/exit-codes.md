@@ -10,6 +10,7 @@ What counts as exit 1, by command:
 
 | Command | Exit 1 when |
 |---|---|
+| `init` | a config file already exists, no candidate repo was found, or the user stopped at a prompt |
 | `scan` | never by itself; with `--fail-on-risk`, any at-risk file |
 | `import` | a conflicting capture, an unreadable path, or (with `--fail-on-pending`) anything uncaptured |
 | `link` | a blocked project, a broken or mismatched link, or an unreadable path |

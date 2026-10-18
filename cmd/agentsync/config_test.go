@@ -262,14 +262,17 @@ func TestRun_NothingConfiguredRefuses(t *testing.T) {
 	}{
 		{[]string{"scan", "--root", wide},
 			"agentsync: no canonical agent repo configured.\n" +
+				"  Create a config file: agentsync init\n" +
 				"  Pass it each run: --repo PATH (or set $AGENTSYNC_REPO)\n" +
 				"  Or set repo in " + path + "\n"},
 		{[]string{"inventory", "--repo", repoRoot},
 			"agentsync: no default tree of projects configured.\n" +
+				"  Create a config file: agentsync init\n" +
 				"  Pass it each run: --root PATH (or set $AGENTSYNC_ROOT)\n" +
 				"  Or set root in " + path + "\n"},
 		{[]string{"scan", "--all", "--repo", repoRoot},
 			"agentsync: --all: no default tree of projects configured.\n" +
+				"  Create a config file: agentsync init\n" +
 				"  Pass it each run: --root PATH (or set $AGENTSYNC_ROOT)\n" +
 				"  Or set root in " + path + "\n"},
 	}

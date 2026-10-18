@@ -32,6 +32,9 @@
 // materialized view that is unsafe to re-run is not a materialized view. Its
 // output is derived and must never be used to decide a write; see the inventory
 // package doc.
+//
+// init writes only agentsync's own config file, from values the user named or
+// confirmed, and refuses to replace an existing one without --force.
 package main
 
 import (
@@ -52,6 +55,7 @@ import (
 const usage = `agentsync — inspect project-local Claude agents against the canonical repo
 
 Usage:
+  agentsync init [flags]      find your agent repo and write the config file
   agentsync scan [flags]      classify project agents against the repo (read-only)
   agentsync import [flags]    capture project-only agents into project-agents/
   agentsync link [flags]      replace project agent files with symlinks into the repo
@@ -90,6 +94,22 @@ and means what the default already means.
 Config file: $XDG_CONFIG_HOME/agentsync/config.toml, else
 ~/.config/agentsync/config.toml. It may set repo and root; a flag beats the
 environment, which beats the file. A file that exists but is broken refuses.
+agentsync init writes it.
+
+init flags:
+  --repo PATH       the canonical agent repo to write (must hold agents/)
+  --root PATH       the default tree to write (default shown: the repo's parent)
+  --apply           write the file; without it init is a dry run
+  --force           replace an existing config file, which is otherwise refused
+                    with exit 1 and its contents shown
+  --search PATH     where to look for agent repos when --repo is not given
+                    (default ~, four levels deep)
+
+In a terminal with neither --repo nor --root, init lists the repos it found,
+asks which to use and which default tree, shows the file, and writes it only
+after you answer y. Anywhere else it never prompts: without --repo it lists
+the candidates and prints the exact command to run, and it writes only with
+--apply and both --repo and --root.
 
 scan flags:
   --at-risk         list only entries whose content is protected nowhere
@@ -250,6 +270,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "init":
+		return runInit(args[1:], stdout, stderr)
 	case "scan":
 		return runScan(args[1:], stdout, stderr)
 	case "import":
@@ -318,7 +340,7 @@ func openRepo(flagValue string) (*scan.Repo, string, error) {
 // notConfigured is the refusal for a setting no source supplied. key is both
 // the flag name and the config key.
 func notConfigured(what, key, env, cfgPath string) error {
-	return fmt.Errorf("no %s configured.\n  Pass it each run: --%s PATH (or set $%s)\n  Or set %s in %s", what, key, env, key, cfgPath)
+	return fmt.Errorf("no %s configured.\n  Create a config file: agentsync init\n  Pass it each run: --%s PATH (or set $%s)\n  Or set %s in %s", what, key, env, key, cfgPath)
 }
 
 // emitRepoChoice prints which repo this run uses and where that came from,
