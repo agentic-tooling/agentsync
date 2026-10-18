@@ -612,6 +612,29 @@ func trackedProject(t *testing.T, f *fixture, project string) string {
 	return path
 }
 
+// seedExclude gives a project a known exclude file, so a test comparing it
+// before and after does not depend on git's init template.
+func seedExclude(t *testing.T, f *fixture, project string) string {
+	t.Helper()
+	const rules = "*.local\n"
+	mustWrite(t, f.excludeFile(project), rules)
+	return rules
+}
+
+// excludePlan plans an --exclude-local adoption in a tracked project and returns
+// the plan, the project file and the exclude file.
+func excludePlan(t *testing.T) (*fixture, Plan, string, string) {
+	t.Helper()
+	f := newFixture(t)
+	path := trackedProject(t, f, "tracked")
+	seedExclude(t, f, "tracked")
+	plan := f.plan(Options{Projects: []string{"tracked"}, ExcludeLocal: true})
+	if len(plan.Excludes) != 1 {
+		t.Fatalf("excludes = %v, want one", plan.Excludes)
+	}
+	return f, plan, path, f.excludeFile("tracked")
+}
+
 // TestNewPlan_TrackedAgentsDirectoryIsRefused: a symlink into this repo names
 // an absolute path that resolves on one machine, so committing one hands every
 // other clone of that project a broken link. The default is to refuse.
