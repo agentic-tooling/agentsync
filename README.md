@@ -32,10 +32,17 @@ just install
 
 ## Quick start
 
-```bash
-export AGENTSYNC_REPO="$HOME/src/my-agents"   # your canonical agents repo
-export AGENTSYNC_ROOT="$HOME/src"             # the tree holding your projects
+Tell agentsync where your trees are in `~/.config/agentsync/config.toml`:
 
+```toml
+repo = "~/src/my-agents"   # your canonical agents repo
+root = "~/src"             # the tree holding your projects
+```
+
+`$AGENTSYNC_REPO` and `$AGENTSYNC_ROOT`, or `--repo` and `--root`, work too and
+take precedence; see [configuration](docs/configuration.md).
+
+```bash
 cd ~/src/api
 agentsync scan --at-risk                      # files protected nowhere else
 agentsync import --apply                      # back them up into the repo

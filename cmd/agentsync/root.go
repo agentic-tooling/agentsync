@@ -13,7 +13,7 @@ import (
 	"github.com/agentic-tooling/agentsync/internal/scan"
 )
 
-// allFlag widens a run back to the whole default tree ($AGENTSYNC_ROOT), so the machine-wide view
+// allFlag widens a run back to the whole default tree, so the machine-wide view
 // is discoverable from --help rather than folklore about --root.
 const allFlag = "all"
 
@@ -51,6 +51,9 @@ type rootChoice struct {
 
 	// marker is the entry that identified the project, named in the report.
 	marker string
+
+	// from names where rootFromAll and rootFromWide found the default tree.
+	from string
 }
 
 // rootFlags are the two ways a run may name its root, registered together
@@ -64,7 +67,7 @@ func registerRoot(fs *flag.FlagSet) rootFlags {
 	return rootFlags{
 		root: fs.String("root", "",
 			"directory tree to scan (default: the project the working directory is in)"),
-		all: fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+") instead of the project you are in"),
+		all: fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+" or root in the config file) instead of the project you are in"),
 	}
 }
 
@@ -75,22 +78,30 @@ func registerRoot(fs *flag.FlagSet) rootFlags {
 // is not a safety boundary.
 func registerWideRoot(fs *flag.FlagSet) rootFlags {
 	return rootFlags{
-		root: fs.String("root", "", "directory tree to scan (default: the whole tree, $"+envRoot+")"),
-		all:  fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+"), which is already the default here"),
+		root: fs.String("root", "", "directory tree to scan (default: the whole tree, $"+envRoot+" or root in the config file)"),
+		all:  fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+" or root in the config file), which is already the default here"),
 	}
 }
 
-// wideRoot is the whole default tree. There is no machine-agnostic guess for it,
-// so an unset $AGENTSYNC_ROOT refuses rather than scanning somewhere unnamed.
-func wideRoot() (string, error) {
+// wideRoot is the whole default tree, from $AGENTSYNC_ROOT or else the config
+// file, with where it came from. There is no machine-agnostic guess for it, so
+// neither being set refuses rather than scanning somewhere unnamed.
+func wideRoot() (path, from string, err error) {
 	if p := strings.TrimSpace(os.Getenv(envRoot)); p != "" {
 		// A relative value would name a different tree from every directory.
 		if !filepath.IsAbs(p) {
-			return "", fmt.Errorf("$%s must be an absolute path, got %q", envRoot, p)
+			return "", "", fmt.Errorf("$%s must be an absolute path, got %q", envRoot, p)
 		}
-		return p, nil
+		return p, "$" + envRoot, nil
 	}
-	return "", fmt.Errorf("no default tree: pass --root PATH or set $%s to the directory holding your projects", envRoot)
+	c, cfgPath, err := loadConfig()
+	if err != nil {
+		return "", "", err
+	}
+	if c.Root == "" {
+		return "", "", notConfigured("default tree of projects", "root", envRoot, cfgPath)
+	}
+	return c.Root, "config file " + cfgPath, nil
 }
 
 // settled returns the choice the flags decide with no derivation of any kind.
@@ -111,11 +122,11 @@ func (f rootFlags) settled(home string) (rootChoice, error) {
 		return rootChoice{}, fmt.Errorf("no home directory, so project keys and the walk up from the working directory cannot be worked out; pass --root PATH")
 	}
 	if *f.all {
-		p, err := wideRoot()
+		p, from, err := wideRoot()
 		if err != nil {
 			return rootChoice{}, fmt.Errorf("--%s: %w", allFlag, err)
 		}
-		return rootChoice{Path: p, Origin: rootFromAll}, nil
+		return rootChoice{Path: p, Origin: rootFromAll, from: from}, nil
 	}
 	return rootChoice{}, nil
 }
@@ -133,11 +144,11 @@ func (f rootFlags) resolveWide(home string) (rootChoice, error) {
 	if err != nil || c.Origin != rootOriginInvalid {
 		return c, err
 	}
-	p, err := wideRoot()
+	p, from, err := wideRoot()
 	if err != nil {
 		return rootChoice{}, err
 	}
-	return rootChoice{Path: p, Origin: rootFromWide}, nil
+	return rootChoice{Path: p, Origin: rootFromWide, from: from}, nil
 }
 
 // resolve decides the root, given the resolved home directory project keys are
@@ -159,7 +170,7 @@ func (f rootFlags) resolve(home string) (rootChoice, error) {
 	// A new project has no marker yet, and widening to the whole tree from there
 	// would scan every project on the machine; --all is the explicit way to ask.
 	if dir == "" {
-		return rootChoice{}, fmt.Errorf("no project found above the working directory, so nothing was scanned; run inside a project or create its .claude/agents/, or pass --%s to scan the whole tree ($%s) or --root PATH", allFlag, envRoot)
+		return rootChoice{}, fmt.Errorf("no project found above the working directory, so nothing was scanned; run inside a project or create its .claude/agents/, or pass --%s to scan the whole tree ($%s or root in the config file) or --root PATH", allFlag, envRoot)
 	}
 	return rootChoice{
 		Path:    dir,
@@ -277,9 +288,9 @@ func emitRootChoice(w io.Writer, home string, c rootChoice) {
 		fmt.Fprintf(w, "Root: %s (from the current directory, which is in a project: %s) — pass --root PATH or --%s to widen.\n",
 			shown, c.marker, allFlag)
 	case rootFromAll:
-		fmt.Fprintf(w, "Root: %s (from --%s: the whole default tree, $%s).\n", shown, allFlag, envRoot)
+		fmt.Fprintf(w, "Root: %s (from --%s: the whole default tree, %s).\n", shown, allFlag, c.from)
 	case rootFromWide:
-		fmt.Fprintf(w, "Root: %s (the default tree, $%s: this command always describes the whole machine and never narrows to the project you are in).\n", shown, envRoot)
+		fmt.Fprintf(w, "Root: %s (the default tree, %s: this command always describes the whole machine and never narrows to the project you are in).\n", shown, c.from)
 	}
 }
 

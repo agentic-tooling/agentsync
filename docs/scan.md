@@ -5,7 +5,7 @@ repo. It is read-only.
 
 ```bash
 agentsync scan                  # the project you are in
-agentsync scan --all            # every project under $AGENTSYNC_ROOT
+agentsync scan --all            # every project under the default tree
 agentsync scan --at-risk        # only files protected nowhere else
 agentsync scan --all --fail-on-risk   # exit 1 if any at-risk file exists (CI)
 ```

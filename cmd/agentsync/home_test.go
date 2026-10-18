@@ -222,14 +222,14 @@ func TestRunScan_OutsideHomeOptOutIsSilent(t *testing.T) {
 	}
 }
 
-// withoutRootLine drops the root-selection line, which every run prints and
-// which --json sends to stderr to keep stdout parseable. It is not a
-// diagnostic, so a test asserting that a correct run raises no diagnostic has
-// to look past it — and only past it: everything else on stderr still fails.
-func withoutRootLine(s string) string {
+// withoutChoiceLines drops the Repo and Root lines, which every run prints and
+// which --json sends to stderr to keep stdout parseable. They are not
+// diagnostics, so a test asserting that a correct run raises none has to look
+// past them — and only past them: everything else on stderr still fails.
+func withoutChoiceLines(s string) string {
 	var kept []string
 	for _, line := range strings.Split(s, "\n") {
-		if line == "" || strings.HasPrefix(line, "Root: ") {
+		if line == "" || strings.HasPrefix(line, "Root: ") || strings.HasPrefix(line, "Repo: ") {
 			continue
 		}
 		kept = append(kept, line)
@@ -245,7 +245,7 @@ func TestRunScan_CorrectHomeIsSilent(t *testing.T) {
 
 	for _, extra := range [][]string{nil, {"--json"}, {"--at-risk"}, {"--fail-on-risk"}} {
 		_, _, stderr := runCLI(t, scanArgs(repoRoot, root, extra...)...)
-		if got := withoutRootLine(stderr); got != "" {
+		if got := withoutChoiceLines(stderr); got != "" {
 			t.Errorf("correct run with %v wrote to stderr:\n%s", extra, got)
 		}
 	}

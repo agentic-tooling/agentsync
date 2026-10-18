@@ -45,6 +45,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/agentic-tooling/agentsync/internal/config"
 	"github.com/agentic-tooling/agentsync/internal/scan"
 )
 
@@ -68,22 +69,27 @@ Common flags:
                     named it. Nothing found before $HOME is refused rather
                     than widened: pass --all or --root to scan from there.
                     Every run prints the root it chose and how it decided.
-  --all             scan $AGENTSYNC_ROOT, the whole default tree, rather than the project
-                    the working directory is in. Refused together with --root:
-                    the two say different things and neither should quietly win.
+  --all             scan the whole default tree ($AGENTSYNC_ROOT, else root in the
+                    config file) rather than the project the working directory
+                    is in. Refused together with --root: the two say different
+                    things and neither should quietly win.
 
 inventory is the one command that does NOT derive a root: it describes the whole
-machine by definition, so --root still names a tree but the default is
-$AGENTSYNC_ROOT and never the project you are standing in. --all is accepted there and means what
-the default already means.
-  --repo PATH       canonical agent repo (default $AGENTSYNC_REPO; required, one or
-                    the other)
+machine by definition, so --root still names a tree but the default is the whole
+default tree and never the project you are standing in. --all is accepted there
+and means what the default already means.
+  --repo PATH       canonical agent repo (default $AGENTSYNC_REPO, else repo in the
+                    config file; required from one of the three)
   --json            emit machine-readable JSON
   --allow-outside-home
                     your projects legitimately live outside $HOME; do not warn
                     (scan, doctor, and a reconcile dry run) or refuse (import,
                     link, reconcile --apply) that every project key falls under
                     _outside-home/
+
+Config file: $XDG_CONFIG_HOME/agentsync/config.toml, else
+~/.config/agentsync/config.toml. It may set repo and root; a flag beats the
+environment, which beats the file. A file that exists but is broken refuses.
 
 scan flags:
   --at-risk         list only entries whose content is protected nowhere
@@ -273,15 +279,52 @@ const (
 	envRoot = "AGENTSYNC_ROOT"
 )
 
-func defaultRepo() string { return os.Getenv(envRepo) }
-
-// openRepo refuses an unnamed repo rather than guessing one: every link this
-// tool writes points into it, so a wrong guess is written to disk.
-func openRepo(path string) (*scan.Repo, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("no canonical agent repo: pass --repo PATH or set $%s", envRepo)
+// loadConfig reads the config file. Callers reach it only once flag and env
+// have left a value unset, so a broken file never blocks a run that named both.
+func loadConfig() (config.Config, string, error) {
+	path, err := config.Path()
+	if err != nil {
+		return config.Config{}, "", err
 	}
-	return scan.NewRepo(path)
+	c, err := config.Load(path)
+	return c, path, err
+}
+
+// openRepo resolves the repo by flag, then $AGENTSYNC_REPO, then the config
+// file, and refuses rather than guessing: every link this tool writes points
+// into it. The string returned names where the path came from.
+func openRepo(flagValue string) (*scan.Repo, string, error) {
+	path, from := strings.TrimSpace(flagValue), "--repo"
+	if path == "" {
+		path, from = strings.TrimSpace(os.Getenv(envRepo)), "$"+envRepo
+	}
+	if path == "" {
+		c, cfgPath, err := loadConfig()
+		if err != nil {
+			return nil, "", err
+		}
+		if c.Repo == "" {
+			return nil, "", notConfigured("canonical agent repo", "repo", envRepo, cfgPath)
+		}
+		path, from = c.Repo, "config file "+cfgPath
+	}
+	repo, err := scan.NewRepo(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("repo from %s: %w", from, err)
+	}
+	return repo, from, nil
+}
+
+// notConfigured is the refusal for a setting no source supplied. key is both
+// the flag name and the config key.
+func notConfigured(what, key, env, cfgPath string) error {
+	return fmt.Errorf("no %s configured.\n  Pass it each run: --%s PATH (or set $%s)\n  Or set %s in %s", what, key, env, key, cfgPath)
+}
+
+// emitRepoChoice prints which repo this run uses and where that came from,
+// beside the Root line and under the same stdout/stderr rule.
+func emitRepoChoice(w io.Writer, repo *scan.Repo, from string) {
+	fmt.Fprintf(w, "Repo: %s (from %s).\n", displayPath(repo.Home, repo.Root), from)
 }
 
 func runScan(args []string, stdout, stderr io.Writer) int {
@@ -290,7 +333,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
 	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", defaultRepo(), "canonical agent repo")
+	repoPath := fs.String("repo", "", "canonical agent repo")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	atRiskOnly := fs.Bool("at-risk", false, "list only at-risk entries")
 	failOnRisk := fs.Bool("fail-on-risk", false, "exit 1 if any at-risk entry is found")
@@ -306,7 +349,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	repo, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo(*repoPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
@@ -329,6 +372,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	// reads the caveat before the numbers it applies to.
 	warnHome(stderr, repo, root.Path, res.Dirs, *allowOutsideHome)
 
+	emitRepoChoice(reportStream(*asJSON, stdout, stderr), repo, repoFrom)
 	emitRootChoice(reportStream(*asJSON, stdout, stderr), repo.Home, root)
 	if *asJSON {
 		if err := emitJSON(stdout, res, *atRiskOnly); err != nil {

@@ -19,6 +19,12 @@ just uninstall
 `INSTALL_DIR=/usr/local/bin just install`. Other recipes: `build`, `test`,
 `lint`, `coverage`, `run`, `clean`. `just run scan` runs from source.
 
+## Dependencies
+
+The only third-party module is `github.com/BurntSushi/toml`, which parses the
+config file in `internal/config`. Its strict-decode check is what rejects
+unknown keys. Keep new dependencies rare and pinned in `go.mod`.
+
 ## The gate
 
 `just check` runs, in order: `go vet` and `gofmt` verification (`lint` fails on
