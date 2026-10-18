@@ -1,11 +1,12 @@
 # Configuration
 
 agentsync does not guess where your trees live. A run that needs a setting that
-is unset refuses with exit 2.
+is unset refuses with exit 2 and names `agentsync init`.
 
 ## The config file
 
-The usual place to set them is `config.toml`:
+The usual place to set them is `config.toml`, which
+[`agentsync init`](init.md) writes for you:
 
 ```toml
 repo = "~/src/my-agents"
@@ -16,8 +17,8 @@ It lives at `$XDG_CONFIG_HOME/agentsync/config.toml`, or at
 `~/.config/agentsync/config.toml` when `$XDG_CONFIG_HOME` is unset or not an
 absolute path. That holds on macOS too.
 
-`repo` and `root` are the only keys. Each must be an absolute path or start
-with `~/`, which expands against `$HOME`; `~` alone means `$HOME`. A missing file
+`repo` and `root` are the only keys. Each must be an absolute path, `~`, or start
+with `~/`; `~` expands against `$HOME`. A missing file
 is not an error, but a symlink there whose target is missing is a broken file.
 
 ## Flags and environment

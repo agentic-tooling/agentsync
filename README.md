@@ -32,15 +32,19 @@ just install
 
 ## Quick start
 
-Tell agentsync where your trees are in `~/.config/agentsync/config.toml`:
+```bash
+agentsync init                                # find your agents repo, write the config file
+```
+
+`init` writes `~/.config/agentsync/config.toml`:
 
 ```toml
 repo = "~/src/my-agents"   # your canonical agents repo
 root = "~/src"             # the tree holding your projects
 ```
 
-`$AGENTSYNC_REPO` and `$AGENTSYNC_ROOT`, or `--repo` and `--root`, work too and
-take precedence; see [configuration](docs/configuration.md).
+`--repo` and `--root`, or `$AGENTSYNC_REPO` and `$AGENTSYNC_ROOT`, work too and
+take precedence; see [configuration](docs/configuration.md) and [init](docs/init.md).
 
 ```bash
 cd ~/src/api
@@ -56,6 +60,7 @@ Run without `--apply` first to see what a command would do.
 
 | Command | Does |
 |---|---|
+| `init` | find your agents repo and write the config file |
 | `scan` | classify project agents against the canonical repo (read-only) |
 | `import` | capture project-only agents into `project-agents/` |
 | `link` | replace project agent files with symlinks into the canonical repo |
@@ -68,6 +73,7 @@ Run without `--apply` first to see what a command would do.
 ## Documentation
 
 - [Configuration](docs/configuration.md): repo and root settings, which tree is scanned, the home guard
+- [init](docs/init.md)
 - [scan](docs/scan.md)
 - [import](docs/import.md)
 - [link](docs/link.md)

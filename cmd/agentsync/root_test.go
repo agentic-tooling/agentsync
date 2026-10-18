@@ -501,8 +501,8 @@ func TestRun_RepoIsRequired(t *testing.T) {
 		if code != exitFailure {
 			t.Errorf("%s: exit = %d, want %d with no repo named", cmd, code, exitFailure)
 		}
-		if !strings.Contains(stderr, "--repo") || !strings.Contains(stderr, "$"+envRepo) {
-			t.Errorf("%s: the refusal does not name --repo and $%s:\n%s", cmd, envRepo, stderr)
+		if !strings.Contains(stderr, "--repo") || !strings.Contains(stderr, "$"+envRepo) || !strings.Contains(stderr, "agentsync init") {
+			t.Errorf("%s: the refusal does not name --repo, $%s and agentsync init:\n%s", cmd, envRepo, stderr)
 		}
 		if stdout != "" {
 			t.Errorf("%s: a refused run must not emit a report:\n%s", cmd, stdout)

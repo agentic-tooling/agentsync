@@ -147,3 +147,183 @@ func TestLoad_TildeWithoutHomeRefuses(t *testing.T) {
 		t.Errorf("err = %v, want a refusal naming $HOME", err)
 	}
 }
+
+func TestParsePath_RefusalNamesBareTilde(t *testing.T) {
+	_, err := ParsePath("root", "Web")
+	if err == nil || !strings.Contains(err.Error(), `root must be an absolute path, ~, or start with ~/, got "Web"`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestParsePath_RefusesInvalidUTF8(t *testing.T) {
+	_, err := ParsePath("repo", "/opt/a\xffb")
+	if err == nil || !strings.Contains(err.Error(), "repo is not valid UTF-8") {
+		t.Errorf("err = %v, want a UTF-8 refusal", err)
+	}
+	if _, err := Render(Config{Repo: "/opt/a\xffb", Root: "/opt"}); err == nil {
+		t.Error("Render accepted a value Load would refuse")
+	}
+}
+
+func TestRender(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	tests := []struct {
+		name string
+		in   Config
+		want string
+	}{
+		{"under HOME is written with ~", Config{Repo: filepath.Join(home, "Web", "agents"), Root: filepath.Join(home, "Web")},
+			"repo = \"~/Web/agents\"\nroot = \"~/Web\"\n"},
+		{"tilde input round-trips", Config{Repo: "~/agents", Root: "~"}, "repo = \"~/agents\"\nroot = \"~\"\n"},
+		{"outside HOME stays absolute", Config{Repo: "/opt/agents", Root: "/srv"}, "repo = \"/opt/agents\"\nroot = \"/srv\"\n"},
+		{"a sibling of HOME is not under it", Config{Repo: home + "x/agents", Root: "/srv"},
+			"repo = \"" + home + "x/agents\"\nroot = \"/srv\"\n"},
+		{"quotes are escaped", Config{Repo: `/opt/a "b"`, Root: "/srv"}, "repo = \"/opt/a \\\"b\\\"\"\nroot = \"/srv\"\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Render(tc.in)
+			if err != nil || string(got) != tc.want {
+				t.Errorf("Render = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRender_NoUsableHomeWritesAbsolute(t *testing.T) {
+	t.Setenv("HOME", "")
+	got, err := Render(Config{Repo: "/opt/agents", Root: "/srv"})
+	if want := "repo = \"/opt/agents\"\nroot = \"/srv\"\n"; err != nil || string(got) != want {
+		t.Errorf("Render = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestRender_RefusesWhatLoadWould(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tests := []struct {
+		name string
+		in   Config
+		want string
+	}{
+		{"empty repo", Config{Root: "/srv"}, "repo: is empty"},
+		{"empty root", Config{Repo: "/opt/agents"}, "root: is empty"},
+		{"relative root", Config{Repo: "/opt/agents", Root: "Web"}, "root must be an absolute path"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Render(tc.in); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want one saying %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// configDir returns a path for config.toml in a directory that does not exist
+// yet, so Write has to create it.
+func configDir(t *testing.T) (dir, path string) {
+	t.Helper()
+	dir = filepath.Join(t.TempDir(), "agentsync")
+	return dir, filepath.Join(dir, "config.toml")
+}
+
+// assertNoTemp fails if Write left its staging file behind in dir.
+func assertNoTemp(t *testing.T, dir string) {
+	t.Helper()
+	tmps, err := filepath.Glob(filepath.Join(dir, ".config-*.toml"))
+	if err != nil || len(tmps) != 0 {
+		t.Errorf("temp files left behind: %v %v", tmps, err)
+	}
+}
+
+func TestWrite_CreatesTheFileLoadReadsBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir, path := configDir(t)
+	want := Config{Repo: filepath.Join(home, "Web", "agents"), Root: filepath.Join(home, "Web")}
+
+	if err := Write(path, want, false); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "repo = \"~/Web/agents\"\nroot = \"~/Web\"\n" {
+		t.Errorf("file = %q, %v", data, err)
+	}
+	for p, mode := range map[string]os.FileMode{path: 0o600, dir: 0o700 | os.ModeDir} {
+		if fi, err := os.Stat(p); err != nil || fi.Mode() != mode {
+			t.Errorf("%s: mode = %v, %v; want %v", p, fi.Mode(), err, mode)
+		}
+	}
+	if got, err := Load(path); err != nil || got != want {
+		t.Errorf("Load = %+v, %v; want %+v", got, err, want)
+	}
+	assertNoTemp(t, dir)
+}
+
+func TestWrite_ExistingFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c := Config{Repo: "/opt/agents", Root: "/srv"}
+
+	t.Run("refused without replace and left alone", func(t *testing.T) {
+		dir, path := configDir(t)
+		mustWriteFile(t, path, "old\n")
+		err := Write(path, c, false)
+		assertNames(t, err, path, "file exists")
+		if data, _ := os.ReadFile(path); string(data) != "old\n" {
+			t.Errorf("file = %q, want it untouched", data)
+		}
+		assertNoTemp(t, dir)
+	})
+
+	t.Run("replaced with replace", func(t *testing.T) {
+		dir, path := configDir(t)
+		mustWriteFile(t, path, "old\n")
+		if err := Write(path, c, true); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if got, err := Load(path); err != nil || got != c {
+			t.Errorf("Load = %+v, %v; want %+v", got, err, c)
+		}
+		assertNoTemp(t, dir)
+	})
+
+	t.Run("a directory in the way is not replaced", func(t *testing.T) {
+		dir, path := configDir(t)
+		mustWriteFile(t, filepath.Join(path, "keep"), "x")
+		err := Write(path, c, true)
+		if err == nil || !strings.HasPrefix(err.Error(), "writing config file "+path) {
+			t.Errorf("err = %v, want a refusal naming %s", err, path)
+		}
+		assertNoTemp(t, dir)
+	})
+}
+
+func TestWrite_RefusesBeforeTouchingDisk(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir, path := configDir(t)
+	if err := Write(path, Config{Repo: "relative"}, false); err == nil || !strings.Contains(err.Error(), "repo must be an absolute path") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("Write created %s before validating: %v", dir, err)
+	}
+}
+
+func TestWrite_UncreatableDirRefuses(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	parent := filepath.Join(t.TempDir(), "file")
+	mustWriteFile(t, parent, "not a directory")
+	path := filepath.Join(parent, "agentsync", "config.toml")
+	err := Write(path, Config{Repo: "/opt/agents", Root: "/srv"}, false)
+	assertNames(t, err, path, "not a directory")
+}
+
+func mustWriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
