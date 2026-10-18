@@ -109,7 +109,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
 	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", defaultRepo(), "canonical agent repo")
+	repoPath := fs.String("repo", "", "canonical agent repo")
 	apply := fs.Bool("apply", false, "make the changes; without it this is a dry run")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	allowOutsideHome := fs.Bool(scan.AllowOutsideHomeFlag, false,
@@ -165,7 +165,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	repo, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo(*repoPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
@@ -241,6 +241,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 		run.done, run.errs = plan.Apply(repo, st)
 	}
 
+	emitRepoChoice(reportStream(*asJSON, stdout, stderr), repo, repoFrom)
 	emitRootChoice(reportStream(*asJSON, stdout, stderr), repo.Home, root)
 	if *asJSON {
 		if err := run.emitJSON(stdout); err != nil {

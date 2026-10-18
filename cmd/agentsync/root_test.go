@@ -393,6 +393,16 @@ func TestEmitRootChoice(t *testing.T) {
 			want:   []string{"~/Web", "--all"},
 		},
 		{
+			name:   "all names the config file it came from",
+			choice: rootChoice{Path: "/home/u/Web", Origin: rootFromAll, from: "config file /c.toml"},
+			want:   []string{"~/Web", "--all", "config file /c.toml"},
+		},
+		{
+			name:   "wide default names the config file it came from",
+			choice: rootChoice{Path: "/home/u/Web", Origin: rootFromWide, from: "config file /c.toml"},
+			want:   []string{"~/Web", "config file /c.toml", "never narrows"},
+		},
+		{
 			name:    "wide default says it never narrows",
 			choice:  rootChoice{Path: "/home/u/Web", Origin: rootFromWide},
 			want:    []string{"~/Web", "whole machine", "never narrows"},

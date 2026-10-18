@@ -43,7 +43,7 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
 	rootF := registerWideRoot(fs)
-	repoPath := fs.String("repo", defaultRepo(), "canonical agent repo")
+	repoPath := fs.String("repo", "", "canonical agent repo")
 	out := fs.String("out", "", "write here instead of <repo>/"+inventoryFileName)
 	toStdout := fs.Bool("stdout", false, "write to stdout and leave the file alone")
 	check := fs.Bool("check", false,
@@ -71,7 +71,7 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	repo, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo(*repoPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
@@ -116,6 +116,7 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// --stdout is this command's machine-readable form, as --json is elsewhere.
+	emitRepoChoice(reportStream(*toStdout, stdout, stderr), repo, repoFrom)
 	emitRootChoice(reportStream(*toStdout, stdout, stderr), repo.Home, root)
 
 	if *toStdout {

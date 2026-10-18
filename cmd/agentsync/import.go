@@ -29,7 +29,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
 	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", defaultRepo(), "canonical agent repo")
+	repoPath := fs.String("repo", "", "canonical agent repo")
 	apply := fs.Bool("apply", false, "write the captures; without it this is a dry run")
 	var update updateFlag
 	fs.Var(&update, "update",
@@ -68,7 +68,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	repo, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo(*repoPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
@@ -112,6 +112,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 		run.written, run.errs = run.plan.Apply()
 	}
 
+	emitRepoChoice(reportStream(*asJSON, stdout, stderr), repo, repoFrom)
 	emitRootChoice(reportStream(*asJSON, stdout, stderr), repo.Home, root)
 	if *asJSON {
 		if err := run.emitJSON(stdout); err != nil {
