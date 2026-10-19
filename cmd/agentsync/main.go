@@ -35,6 +35,9 @@
 //
 // init writes only agentsync's own config file, from values the user named or
 // confirmed, and refuses to replace an existing one without --force.
+//
+// optimize is the only command that uses the network: it asks an OpenRouter
+// advisor about each agent's model and effort, and writes nothing.
 package main
 
 import (
@@ -62,6 +65,8 @@ Usage:
   agentsync doctor [flags]    report broken/foreign/mismatched links and stale captures
   agentsync reconcile [flags] act on that drift, gated on what this tool recorded
   agentsync inventory [flags] regenerate inventory.json: every agent on this machine
+  agentsync optimize [flags]  ask an OpenRouter advisor which model and effort each
+                              agent should use (report only; the one networked command)
   agentsync version
 
 Common flags:
@@ -216,6 +221,21 @@ inventory flags:
                     is a real change in the tree, which is what makes this a
                     freshness test rather than a clock reading.
 
+optimize flags:
+  --advisor MODEL   OpenRouter decision model to ask (default ~typesafe/jev-latest;
+                    cloudflare/clef also works)
+  --max-cost USD    skip any request that could take reported spend past this
+                    (default 0.50)
+  --min-confidence P
+                    least probability a pick needs before it is suggested
+                    (default 0.6); below it the row says keep (low confidence)
+  --agent NAME      ask only about this agent (repeatable)
+
+optimize needs $OPENROUTER_API_KEY and sends each agent file (first 24 KB) to
+OpenRouter, one request per agent with no retries. It reads model: and effort:
+from each agent's frontmatter and writes nothing. Exit 1 when a row is
+unresolved or skipped.
+
 scan and doctor are read-only. import writes only into this repo, only with
 --apply, and never into a project's .claude/agents directory. link is the one
 command that writes into a project, only with --apply, and it refuses any
@@ -284,6 +304,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runReconcile(args[1:], stdout, stderr)
 	case "inventory":
 		return runInventory(args[1:], stdout, stderr)
+	case "optimize":
+		return runOptimize(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK

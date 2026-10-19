@@ -1,0 +1,42 @@
+{
+  "model": "cloudflare/clef",
+  "answers": {
+    "model": {
+      "type": "choice",
+      "choice": "opus",
+      "probabilities": {
+        "haiku": 0.0153,
+        "sonnet": 0.2806,
+        "opus": 0.668,
+        "fable": 0.0361
+      },
+      "confidence": 0.3687
+    },
+    "effort": {
+      "type": "score",
+      "score": 2.2992,
+      "legend": {
+        "0": "low",
+        "1": "medium",
+        "2": "high",
+        "3": "xhigh",
+        "4": "max"
+      },
+      "probabilities": {
+        "0": 0.0138,
+        "1": 0.0774,
+        "2": 0.5636,
+        "3": 0.2861,
+        "4": 0.0591
+      },
+      "confidence": 0.2615
+    }
+  },
+  "usage": {
+    "input_tokens": 1888,
+    "output_tokens": 0,
+    "cost": 0.00045312
+  },
+  "id": "gen-dec-1792341389-TqBYOiBGoPYLoycdCH2R",
+  "provider": "Cloudflare"
+}

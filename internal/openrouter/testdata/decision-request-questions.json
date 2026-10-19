@@ -1,0 +1,23 @@
+{
+  "model": {
+    "type": "choice",
+    "instructions": "Which Claude model family should this subagent run on?",
+    "criteria": {
+      "haiku": "Claude Haiku: fastest and cheapest, for simple, mechanical or high-volume work",
+      "sonnet": "Claude Sonnet: balanced quality and cost, strong at most coding and review work",
+      "opus": "Claude Opus: highest-quality reasoning for hard, high-stakes judgement",
+      "fable": "Claude Fable: frontier model for long autonomous knowledge work, most expensive"
+    }
+  },
+  "effort": {
+    "type": "score",
+    "instructions": "How much reasoning effort does this subagent need?",
+    "criteria": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  }
+}

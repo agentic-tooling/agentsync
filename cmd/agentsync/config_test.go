@@ -10,7 +10,9 @@ import (
 )
 
 // TestMain points HOME and XDG_CONFIG_HOME at empty temp dirs, so no test can
-// read the developer's real config file and pass or fail because of it.
+// read the developer's real config file and pass or fail because of it. It
+// also clears the OpenRouter key, so no test can spend money, and the Claude
+// overrides optimize reports.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "agentsync-test-")
 	if err != nil {
@@ -22,12 +24,17 @@ func TestMain(m *testing.M) {
 		os.Mkdir(home, 0o755),
 		os.Setenv("HOME", home),
 		os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg")),
+		os.Unsetenv(envOpenRouterKey),
+		os.Unsetenv("CLAUDE_CODE_SUBAGENT_MODEL"),
+		os.Unsetenv("CLAUDE_CODE_EFFORT_LEVEL"),
 	} {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(exitFailure)
 		}
 	}
+	// A test that sets a key but forgets its fake server fails here, offline.
+	openrouterURL = "http://127.0.0.1:0"
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

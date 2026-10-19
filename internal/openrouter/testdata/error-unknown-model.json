@@ -1,0 +1,6 @@
+{
+  "error": {
+    "message": "Model openai/gpt-6-luna does not exist",
+    "code": 400
+  }
+}

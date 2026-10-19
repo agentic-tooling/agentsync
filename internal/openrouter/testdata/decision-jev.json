@@ -1,0 +1,42 @@
+{
+  "model": "typesafe/jev-1.14-20261014",
+  "answers": {
+    "model": {
+      "type": "choice",
+      "choice": "sonnet",
+      "probabilities": {
+        "haiku": 0,
+        "sonnet": 0.57,
+        "opus": 0.43,
+        "fable": 0
+      },
+      "confidence": 0.43
+    },
+    "effort": {
+      "type": "score",
+      "score": 2.91,
+      "legend": {
+        "0": "low",
+        "1": "medium",
+        "2": "high",
+        "3": "xhigh",
+        "4": "max"
+      },
+      "probabilities": {
+        "0": 0,
+        "1": 0,
+        "2": 0.09,
+        "3": 0.89,
+        "4": 0.02
+      },
+      "confidence": 0.91
+    }
+  },
+  "usage": {
+    "input_tokens": 1956,
+    "output_tokens": 64,
+    "cost": 0.000082152
+  },
+  "id": "gen-dec-1792341390-hlnW8eAck1t4e6SsowM0",
+  "provider": "TypeSafe"
+}
