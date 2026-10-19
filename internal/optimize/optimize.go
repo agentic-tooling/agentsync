@@ -31,7 +31,8 @@ type Family struct {
 	Description string
 }
 
-var families = []Family{
+// Families are the aliases optimize offers and override accepts.
+var Families = []Family{
 	{"haiku", "Claude Haiku: fastest and cheapest, for simple, mechanical or high-volume work"},
 	{"sonnet", "Claude Sonnet: balanced quality and cost, strong at most coding and review work"},
 	{"opus", "Claude Opus: highest-quality reasoning for hard, high-stakes judgement"},
@@ -114,16 +115,21 @@ type Config struct {
 	Families      []Family
 }
 
-// Current returns an agent's model and effort as written, without a trailing
-// YAML comment or quotes, or NotSet.
-func Current(content string) (model, effort string) {
+// Field returns frontmatter key k as written, without a trailing YAML comment
+// or quotes, or "".
+func Field(content, k string) string {
 	fm, _ := discover.Frontmatter(content)
+	v := " " + fm[k]
+	for _, sep := range []string{" #", "\t#"} {
+		v, _, _ = strings.Cut(v, sep)
+	}
+	return strings.Trim(strings.TrimSpace(v), `"'`)
+}
+
+// Current returns an agent's model and effort as Field reads them, or NotSet.
+func Current(content string) (model, effort string) {
 	get := func(k string) string {
-		v := " " + fm[k]
-		for _, sep := range []string{" #", "\t#"} {
-			v, _, _ = strings.Cut(v, sep)
-		}
-		if v = strings.Trim(strings.TrimSpace(v), `"'`); v != "" {
+		if v := Field(content, k); v != "" {
 			return v
 		}
 		return NotSet
@@ -134,7 +140,7 @@ func Current(content string) (model, effort string) {
 // Available keeps the aliases OpenRouter lists an anthropic/claude-<family>-<version> model for.
 func Available(models []openrouter.Model) []Family {
 	var out []Family
-	for _, f := range families {
+	for _, f := range Families {
 		for _, m := range models {
 			v, ok := strings.CutPrefix(m.ID, "anthropic/claude-"+f.Alias+"-")
 			if ok && v != "" && v[0] >= '0' && v[0] <= '9' {

@@ -38,6 +38,8 @@
 //
 // optimize is the only command that uses the network: it asks an OpenRouter
 // advisor about each agent's model and effort, and writes nothing.
+//
+// override writes only the project's .claude/settings.local.json, with --apply.
 package main
 
 import (
@@ -52,6 +54,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/agentic-tooling/agentsync/internal/config"
+	"github.com/agentic-tooling/agentsync/internal/override"
 	"github.com/agentic-tooling/agentsync/internal/scan"
 )
 
@@ -67,6 +70,7 @@ Usage:
   agentsync inventory [flags] regenerate inventory.json: every agent on this machine
   agentsync optimize [flags]  ask an OpenRouter advisor which model and effort each
                               agent should use (report only; the one networked command)
+  agentsync override [flags]  set this checkout's model and effort for a Claude agent
   agentsync version
 
 Common flags:
@@ -236,10 +240,24 @@ OpenRouter, one request per agent with no retries. It reads model: and effort:
 from each agent's frontmatter and writes nothing. Exit 1 when a row is
 unresolved or skipped.
 
+override flags:
+  --agent NAME      the agent to override, by its frontmatter name; it must be
+                    in the root's .claude/agents/ (--all is refused)
+  --model M         haiku, sonnet, opus or fable
+  --effort E        low, medium, high, xhigh or max (give --model, --effort or both)
+  --clear NAME      remove that agent's override
+  --apply           write the change; without it override is a dry run
+
+With no flags, override lists the root's overrides. They live in one
+PreToolUse hook in <root>/.claude/settings.local.json, which Claude Code keeps
+per user. The hook runs agentsync from PATH; doctor checks that it can.
+
 scan and doctor are read-only. import writes only into this repo, only with
 --apply, and never into a project's .claude/agents directory. link is the one
-command that writes into a project, only with --apply, and it refuses any
-project holding a file this repo has no copy of — import that first.
+command that writes into a project's .claude/agents, only with --apply, and it
+refuses any project holding a file this repo has no copy of — import that
+first. override writes only the project's .claude/settings.local.json, also
+only with --apply.
 
 inventory also writes only into this repo, and takes no --apply: its sole
 output is inventory.json, which it owns, recomputes from scratch every run, and
@@ -306,6 +324,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runInventory(args[1:], stdout, stderr)
 	case "optimize":
 		return runOptimize(args[1:], stdout, stderr)
+	case "override":
+		return runOverride(args[1:], stdout, stderr)
+	case "hook":
+		return runHook(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -424,7 +446,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			return exitFailure
 		}
 	} else {
-		emitText(stdout, res, repo.Root, root.Path, *atRiskOnly)
+		emitText(stdout, res, repo.Root, root.Path, *atRiskOnly, entryOverrides(res, stderr))
 	}
 
 	if *failOnRisk && len(res.AtRisk()) > 0 {
@@ -505,7 +527,7 @@ var stateNote = map[scan.State]string{
 	scan.StateHealthyLink: "already linked to the repo",
 }
 
-func emitText(w io.Writer, res scan.Result, repoRoot, root string, atRiskOnly bool) {
+func emitText(w io.Writer, res scan.Result, repoRoot, root string, atRiskOnly bool, ov map[string]override.Value) {
 	shown := res
 	if atRiskOnly {
 		shown = filterAtRisk(res)
@@ -524,7 +546,7 @@ func emitText(w io.Writer, res scan.Result, repoRoot, root string, atRiskOnly bo
 		}
 		fmt.Fprintln(w)
 	} else {
-		emitGroups(w, shown.Entries)
+		emitGroups(w, shown.Entries, ov)
 	}
 
 	emitProblems(w, res.Problems)
@@ -565,7 +587,7 @@ func projectColumn(entries []scan.Entry) int {
 	return width
 }
 
-func emitGroups(w io.Writer, entries []scan.Entry) {
+func emitGroups(w io.Writer, entries []scan.Entry, ov map[string]override.Value) {
 	width := projectColumn(entries)
 
 	byState := make(map[scan.State][]scan.Entry)
@@ -613,6 +635,9 @@ func emitGroups(w io.Writer, entries []scan.Entry) {
 				} else {
 					note = "  (committed in its own repo)"
 				}
+			}
+			if v, ok := ov[e.Path]; ok {
+				note += "  override: " + v.String()
 			}
 			fmt.Fprintf(w, "     %-*s %-28s%s\n", width, e.Project, e.Name, note)
 		}

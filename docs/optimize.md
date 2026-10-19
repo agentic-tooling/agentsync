@@ -27,6 +27,8 @@ several projects is asked about once. A `.md` file without `name` and
 For each agent it shows `model:` and `effort:` from the frontmatter as written
 (without quotes or a trailing `# comment`), or `(not set)`. If `$CLAUDE_CODE_SUBAGENT_MODEL` or `$CLAUDE_CODE_EFFORT_LEVEL`
 is set, it notes that Claude Code uses it over the frontmatter at run time.
+It also notes each agent asked about that has a project [override](override.md);
+these notes are not in the JSON.
 
 Each agent costs one `POST /api/alpha/decisions` request, with no retries. The
 request holds one framing sentence, the first 24 KB of the agent file and two

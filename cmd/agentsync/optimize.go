@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -112,6 +113,13 @@ func runOptimize(args []string, stdout, stderr io.Writer) int {
 		if os.Getenv(v) != "" {
 			overrides = append(overrides, v)
 			fmt.Fprintf(notes, "Note: $%s is set; Claude Code uses it over the frontmatter at run time.\n", v)
+		}
+	}
+	ov := entryOverrides(res, stderr)
+	for _, e := range res.Entries {
+		if v, ok := ov[e.Path]; ok && (len(names) == 0 || slices.Contains(names, e.Name)) {
+			fmt.Fprintf(notes, "Note: %s/%s has a project override (%s) in %s; Claude Code uses it over the frontmatter there.\n",
+				e.Project, e.Name, v, displayPath(repo.Home, settingsPath(filepath.Dir(e.Path))))
 		}
 	}
 

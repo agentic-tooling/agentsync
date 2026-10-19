@@ -69,6 +69,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		check:    repo.CheckHome(root.Path, res.Dirs),
 		report:   doctor.Diagnose(repo, res),
 	}
+	findings, problems := overrideFindings(repo.Home, res.Dirs)
+	run.report.Findings = append(run.report.Findings, findings...)
+	run.report.Problems = append(run.report.Problems, problems...)
 
 	// Both home diagnostics, after the diagnosis and before the report, so a
 	// terminal user reads them before the numbers they apply to.
@@ -220,22 +223,25 @@ var doctorKindOrder = []doctor.Kind{
 	doctor.KindStaleCapture,
 	doctor.KindOrphanedCaptures,
 	doctor.KindForeignLink,
+	doctor.KindOverrideCannotRun,
 }
 
 var doctorKindMarker = map[doctor.Kind]string{
-	doctor.KindBrokenLink:       "!!",
-	doctor.KindMismatch:         "!!",
-	doctor.KindStaleCapture:     "!!",
-	doctor.KindOrphanedCaptures: "!!",
-	doctor.KindForeignLink:      "  ",
+	doctor.KindBrokenLink:        "!!",
+	doctor.KindMismatch:          "!!",
+	doctor.KindStaleCapture:      "!!",
+	doctor.KindOrphanedCaptures:  "!!",
+	doctor.KindForeignLink:       "  ",
+	doctor.KindOverrideCannotRun: "!!",
 }
 
 var doctorKindNote = map[doctor.Kind]string{
-	doctor.KindBrokenLink:       "link into this repo whose target is gone — NOT unlinked",
-	doctor.KindMismatch:         "linked to the wrong file in this repo — NOT repointed",
-	doctor.KindStaleCapture:     "captured here, but no live file in the project — NOT deleted",
-	doctor.KindOrphanedCaptures: "captured here, but the whole project is gone — NOT deleted",
-	doctor.KindForeignLink:      "points outside this repo — not ours, and not a fault",
+	doctor.KindBrokenLink:        "link into this repo whose target is gone — NOT unlinked",
+	doctor.KindMismatch:          "linked to the wrong file in this repo — NOT repointed",
+	doctor.KindStaleCapture:      "captured here, but no live file in the project — NOT deleted",
+	doctor.KindOrphanedCaptures:  "captured here, but the whole project is gone — NOT deleted",
+	doctor.KindForeignLink:       "points outside this repo — not ours, and not a fault",
+	doctor.KindOverrideCannotRun: "override hook that cannot run — the overrides do nothing",
 }
 
 func (r doctorRun) emitText(w io.Writer) {
@@ -309,6 +315,10 @@ func (r doctorRun) emitSummary(w io.Writer) {
 	if n := counts[doctor.KindForeignLink]; n > 0 {
 		fmt.Fprintf(w, "%d foreign link%s reported for completeness; %s belong%s to something else and %s not affect this exit code.\n",
 			n, plural(n, "", "s"), plural(n, "it", "they"), plural(n, "s", ""), plural(n, "does", "do"))
+	}
+	if n := counts[doctor.KindOverrideCannotRun]; n > 0 {
+		fmt.Fprintf(w, "%d project%s override%s agents through a hook that cannot run here. Put a current agentsync on PATH, or remove the overrides with agentsync override --clear.\n",
+			n, plural(n, "", "s"), plural(n, "s", ""))
 	}
 	if n := len(r.report.Problems); n > 0 {
 		fmt.Fprintf(w, "%d path%s could not be judged, so this diagnosis is incomplete.\n",

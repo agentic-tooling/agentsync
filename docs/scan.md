@@ -25,4 +25,9 @@ report. Use `--fail-on-risk` when you want an assertion. A path the scan could
 not read or classify is reported and qualifies the summary, but does not
 change the exit code.
 
+An agent with an [override](override.md) in its project's
+`.claude/settings.local.json` shows it on its line, as `override: sonnet /
+medium` (`-` for a part the override leaves alone). A settings file that cannot
+be read is a warning on stderr. The JSON output does not include overrides.
+
 Root selection and `--all` are covered in [configuration](configuration.md).
