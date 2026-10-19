@@ -84,7 +84,7 @@ func atRiskNames(res scan.Result) []string {
 func renderText(t *testing.T, res scan.Result, atRiskOnly bool) string {
 	t.Helper()
 	var buf bytes.Buffer
-	emitText(&buf, res, "/repo", "/root", atRiskOnly)
+	emitText(&buf, res, "/repo", "/root", atRiskOnly, nil)
 	return buf.String()
 }
 

@@ -76,6 +76,10 @@ const (
 	// KindForeignLink is state 4: a symlink pointing outside this repo.
 	// Informational only — see NeedsHuman.
 	KindForeignLink
+
+	// KindOverrideCannotRun is a project override hook whose agentsync is
+	// missing from PATH or cannot serve the hook, so the overrides do nothing.
+	KindOverrideCannotRun
 )
 
 func (k Kind) String() string {
@@ -90,6 +94,8 @@ func (k Kind) String() string {
 		return "orphaned-captures"
 	case KindForeignLink:
 		return "foreign-link"
+	case KindOverrideCannotRun:
+		return "override-cannot-run"
 	default:
 		return "invalid"
 	}

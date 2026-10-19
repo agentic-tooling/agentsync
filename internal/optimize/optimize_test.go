@@ -91,7 +91,7 @@ func agent(label, model, effort string) Agent {
 }
 
 func config() Config {
-	return Config{Advisor: "~typesafe/jev-latest", Price: 4.2e-8, MaxCost: 0.5, MinConfidence: 0.6, Families: families}
+	return Config{Advisor: "~typesafe/jev-latest", Price: 4.2e-8, MaxCost: 0.5, MinConfidence: 0.6, Families: Families}
 }
 
 func TestCurrent(t *testing.T) {
@@ -111,7 +111,7 @@ func TestCurrent(t *testing.T) {
 }
 
 func TestAvailable(t *testing.T) {
-	if got := Available(models(t)); !reflect.DeepEqual(got, families) {
+	if got := Available(models(t)); !reflect.DeepEqual(got, Families) {
 		t.Errorf("real list: %v, want all four", got)
 	}
 	got := Available([]openrouter.Model{{ID: "anthropic/claude-opus-5.5"}, {ID: "anthropic/claude-sonnet-x"}, {ID: "anthropic/claude-haiku-"}, {ID: "openai/fable-5"}})
@@ -143,7 +143,7 @@ func TestInputPrice(t *testing.T) {
 func TestBody_MatchesTheSpikeRequestAndCapsState(t *testing.T) {
 	var req openrouter.DecisionRequest
 	content := strings.Repeat("a", stateCap-1) + "é" + "tail"
-	if err := json.Unmarshal(Body("cloudflare/clef", content, families), &req); err != nil {
+	if err := json.Unmarshal(Body("cloudflare/clef", content, Families), &req); err != nil {
 		t.Fatal(err)
 	}
 	if req.Model != "cloudflare/clef" || len(req.State) != 2 || req.State[0] != framing {

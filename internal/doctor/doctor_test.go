@@ -759,6 +759,9 @@ func TestReport_CountsAndPrintableForms(t *testing.T) {
 	if got, want := rep.Findings[2].String(), "orphaned-captures b: no project"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
+	if got := KindOverrideCannotRun.String(); got != "override-cannot-run" || !KindOverrideCannotRun.NeedsHuman() {
+		t.Errorf("KindOverrideCannotRun = %q, needs human %v; want override-cannot-run, true", got, KindOverrideCannotRun.NeedsHuman())
+	}
 	if got := KindInvalid.String(); got != "invalid" {
 		t.Errorf("KindInvalid.String() = %q, want invalid", got)
 	}

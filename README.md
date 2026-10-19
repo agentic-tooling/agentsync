@@ -68,6 +68,7 @@ Run without `--apply` first to see what a command would do.
 | `reconcile` | act on that drift, gated on what agentsync itself recorded |
 | `inventory` | regenerate `inventory.json`, a record of every agent on the machine |
 | `optimize` | ask an OpenRouter advisor which model and effort each agent should use; report only |
+| `override` | set one checkout's model and effort for a Claude agent without forking it |
 
 `agentsync help` lists every flag.
 
@@ -82,6 +83,7 @@ Run without `--apply` first to see what a command would do.
 - [reconcile](docs/reconcile.md)
 - [inventory](docs/inventory.md)
 - [optimize](docs/optimize.md)
+- [override](docs/override.md)
 - [State file](docs/state-file.md)
 - [Exit codes](docs/exit-codes.md)
 - [Development](docs/development.md): toolchain, CI, releases

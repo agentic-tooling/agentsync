@@ -2,7 +2,9 @@
 
 `agentsync link` replaces a project's real agent files with per-file symlinks
 into the canonical repo, so one copy serves every project. It is the only
-command that writes into a project, and it is a dry run without `--apply`.
+command that writes into a project's `.claude/agents/` ([override](override.md)
+writes only `.claude/settings.local.json`), and it is a dry run without
+`--apply`.
 
 ```bash
 agentsync link                              # dry run
