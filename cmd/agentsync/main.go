@@ -89,7 +89,8 @@ Common flags:
   --all             scan the whole default tree ($AGENTSYNC_ROOT, else root in the
                     config file) rather than the project the working directory
                     is in
-  --json            emit machine-readable JSON
+  --json            emit machine-readable JSON (scan, import, link, doctor,
+                    reconcile, optimize)
   --allow-outside-home
                     your projects legitimately live outside $HOME; do not warn
                     (scan, doctor, and a reconcile dry run) or refuse (import,
@@ -124,7 +125,8 @@ the candidates and prints the exact command to run, and it writes only with
 
 scan flags:
   --at-risk         list only entries whose content is protected nowhere
-  --fail-on-risk    exit 1 if any at-risk entry is found (for CI)
+  --fail-on-risk    exit 1 if any at-risk entry is found or a path could not
+                    be read or classified (for CI)
 
 import flags:
   --apply           write the captures; without it import is a dry run
@@ -225,7 +227,8 @@ inventory flags:
                     regeneration would produce. The document holds nothing
                     volatile — no timestamp, no tool version — so a difference
                     is a real change in the tree, which is what makes this a
-                    freshness test rather than a clock reading.
+                    freshness test rather than a clock reading. Also exit 1
+                    if a path could not be read or classified.
 
 optimize flags:
   --advisor MODEL   OpenRouter decision model to ask (default ~typesafe/jev-latest;
@@ -270,6 +273,8 @@ output is inventory.json, which it owns, recomputes from scratch every run, and
 overwrites atomically. That file is derived — the filesystem is the source of
 truth and regenerating is the documented fix for any inconsistency — so nothing
 may decide a write from it. Read it for orientation; re-scan before acting.
+A path it could not read or classify is skipped and reported, and the run
+exits 1.
 
 doctor never writes anywhere at all: it reports broken links, foreign links,
 links pointing at the wrong file in this repo, captures whose project no longer
@@ -285,8 +290,8 @@ bytes are in no commit. doctor's exit code, not reconcile's, is what asserts
 that nothing has drifted.
 
 Exit codes: 0 clean, 1 something needs resolving (at-risk files, conflicts, a
-blocked or broken project, or a path the scan could not read), 2 the tool could
-not do its job.
+blocked or broken project, or a path the scan could not read: scan only with
+--fail-on-risk, optimize 2 instead), 2 the tool could not do its job.
 `
 
 // Exit codes. These are part of the CLI contract: CI keys off 1 meaning
@@ -430,7 +435,8 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	all := registerAll(fs)
 	asJSON := fs.Bool("json", false, "emit JSON")
 	atRiskOnly := fs.Bool("at-risk", false, "list only at-risk entries")
-	failOnRisk := fs.Bool("fail-on-risk", false, "exit 1 if any at-risk entry is found")
+	failOnRisk := fs.Bool("fail-on-risk", false,
+		"exit 1 if any at-risk entry is found or a path could not be read or classified")
 	allowOutsideHome := fs.Bool(scan.AllowOutsideHomeFlag, false,
 		"projects legitimately live outside $HOME; suppress the home warning")
 
@@ -481,7 +487,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		emitText(stdout, res, repo.Root, root.Path, *atRiskOnly, entryOverrides(res, stderr))
 	}
 
-	if *failOnRisk && len(res.AtRisk()) > 0 {
+	if *failOnRisk && (len(res.AtRisk()) > 0 || len(res.Problems) > 0) {
 		return exitAtRisk
 	}
 	return exitOK

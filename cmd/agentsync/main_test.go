@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/testfs"
 )
 
 // --- helpers ---------------------------------------------------------------
@@ -591,6 +592,44 @@ func TestRunScan_EndToEnd_ProblemDoesNotHideRisk(t *testing.T) {
 	}
 }
 
+// An unreadable path fails --fail-on-risk even with nothing at risk, since it
+// may hide at-risk files; without the flag scan stays a report and exits 0.
+func TestRunScan_UnreadablePathFailsOnRisk(t *testing.T) {
+	base := t.TempDir()
+	repoRoot := filepath.Join(base, "agents-repo")
+	mustMkdirT(t, filepath.Join(repoRoot, "agents"))
+	unreadable := lockedSubtree(t, base)
+
+	if code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, base)...); code != exitOK {
+		t.Errorf("without --fail-on-risk exit = %d, want %d\nstdout:\n%s\nstderr:\n%s",
+			code, exitOK, stdout, stderr)
+	}
+
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, base, "--fail-on-risk")...)
+	if code != exitAtRisk {
+		t.Errorf("--fail-on-risk exit = %d, want %d\nstdout:\n%s\nstderr:\n%s",
+			code, exitAtRisk, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "1 path could not be checked") {
+		t.Errorf("the summary does not count the unread path:\n%s", stdout)
+	}
+
+	code, stdout, stderr = runCLI(t, scanArgs(t, repoRoot, base, "--json", "--fail-on-risk")...)
+	if code != exitAtRisk {
+		t.Errorf("--json --fail-on-risk exit = %d, want %d\nstderr:\n%s", code, exitAtRisk, stderr)
+	}
+	var res scan.Result
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("--json output does not parse: %v\n%s", err, stdout)
+	}
+	if n := len(res.AtRisk()); n != 0 {
+		t.Errorf("fixture has %d at-risk entries, want 0", n)
+	}
+	if len(res.Problems) != 1 || res.Problems[0].Path != unreadable {
+		t.Errorf("problems = %v, want exactly %s", res.Problems, unreadable)
+	}
+}
+
 // useRepo names the repo the way a user's environment does, and points the
 // config lookup at an empty directory so the author's real file is never read.
 func useRepo(t *testing.T, repoRoot string) {
@@ -615,6 +654,17 @@ func inTree(t *testing.T, repoRoot, root string) {
 }
 
 // --- local fs helpers (the scan package's own are unexported) --------------
+
+// lockedSubtree plants a project the scan cannot enter under root and returns
+// the path it will report.
+func lockedSubtree(t *testing.T, root string) string {
+	t.Helper()
+	locked := filepath.Join(root, "locked")
+	mustMkdirT(t, locked)
+	unreadable, inside := testfs.UnreadableSubtree(t, locked)
+	testfs.PlantAgentsDir(t, inside, "proj")
+	return unreadable
+}
 
 func mustMkdirT(t *testing.T, dir string) {
 	t.Helper()

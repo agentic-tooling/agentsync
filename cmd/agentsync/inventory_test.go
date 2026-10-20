@@ -343,3 +343,116 @@ func TestRunInventory_DoesNotWarnWithNoPluginTree(t *testing.T) {
 		t.Errorf("warned with no plugin tree at all:\n%s", stderr)
 	}
 }
+
+// --- unreadable paths -------------------------------------------------------
+
+// Every mode still does its job over what it could read, then names the
+// skipped path and exits 1: the document is silently short by whatever it hides.
+func TestRunInventory_UnreadablePathIsReportedAndExitsOne(t *testing.T) {
+	t.Run("default writes the readable projects", func(t *testing.T) {
+		base, repoRoot, root := inventoryFixture(t)
+		mustWriteT(t, projectAgentPath(base, "Web/one", "solo"), "only here\n")
+		unreadable := lockedSubtree(t, root)
+
+		code, stdout, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...)
+		if code != exitAtRisk {
+			t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
+		}
+		if !strings.Contains(readFileT(t, inventoryPath(repoRoot)), "solo") {
+			t.Error("the readable project is missing from the written document")
+		}
+		if !strings.Contains(stdout, "Wrote ") {
+			t.Errorf("stdout does not report the write:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, unreadable) {
+			t.Errorf("stderr does not name the unreadable path:\n%s", stderr)
+		}
+		want := "agentsync: inventory written, but 1 path could not be read or classified and is missing from it"
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr)
+		}
+	})
+
+	t.Run("--check exits 1 against a file that otherwise matches", func(t *testing.T) {
+		_, repoRoot, root := inventoryFixture(t)
+		if code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...); code != exitOK {
+			t.Fatalf("write exit = %d: %s", code, stderr)
+		}
+		unreadable := lockedSubtree(t, root)
+
+		code, stdout, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--check")...)
+		if code != exitAtRisk {
+			t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
+		}
+		// The comparison itself passed, so the 1 comes from the skipped path alone.
+		if !strings.Contains(stdout, "up to date") {
+			t.Errorf("the file was expected to match the readable tree:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, unreadable) {
+			t.Errorf("stderr does not name the unreadable path:\n%s", stderr)
+		}
+		want := "agentsync: 1 path could not be read or classified and is missing from the inventory"
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr)
+		}
+	})
+
+	t.Run("--stdout prints the document", func(t *testing.T) {
+		base, repoRoot, root := inventoryFixture(t)
+		mustWriteT(t, projectAgentPath(base, "Web/one", "solo"), "only here\n")
+		unreadable := lockedSubtree(t, root)
+
+		code, stdout, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--stdout")...)
+		if code != exitAtRisk {
+			t.Fatalf("exit = %d, want %d\nstderr:\n%s", code, exitAtRisk, stderr)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+			t.Fatalf("stdout is not the JSON document: %v\n%s", err, stdout)
+		}
+		if !strings.Contains(stdout, "solo") {
+			t.Errorf("the readable project is missing from the document:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, unreadable) {
+			t.Errorf("stderr does not name the unreadable path:\n%s", stderr)
+		}
+		if _, err := os.Stat(inventoryPath(repoRoot)); !os.IsNotExist(err) {
+			t.Errorf("--stdout touched the file: stat err = %v", err)
+		}
+	})
+
+	// A mode that already failed keeps its 2; the skipped path must not lower it.
+	t.Run("--check that cannot read the file keeps exit 2", func(t *testing.T) {
+		_, repoRoot, root := inventoryFixture(t)
+		unreadable := lockedSubtree(t, root)
+		dest := filepath.Join(t.TempDir(), "in-the-way")
+		mustMkdirT(t, dest)
+
+		code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--check", "--out", dest)...)
+		if code != exitFailure {
+			t.Fatalf("exit = %d, want %d\nstderr:\n%s", code, exitFailure, stderr)
+		}
+		if !strings.Contains(stderr, unreadable) {
+			t.Errorf("stderr does not name the unreadable path:\n%s", stderr)
+		}
+	})
+
+	t.Run("a failed write keeps exit 2 and does not claim it wrote", func(t *testing.T) {
+		_, repoRoot, root := inventoryFixture(t)
+		unreadable := lockedSubtree(t, root)
+		file := filepath.Join(t.TempDir(), "a-file")
+		mustWriteT(t, file, "not a directory\n")
+
+		code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--out", filepath.Join(file, "inv.json"))...)
+		if code != exitFailure {
+			t.Fatalf("exit = %d, want %d\nstderr:\n%s", code, exitFailure, stderr)
+		}
+		if strings.Contains(stderr, "inventory written") {
+			t.Errorf("stderr claims a write that failed:\n%s", stderr)
+		}
+		want := "agentsync: 1 path could not be read or classified and is missing from the inventory"
+		if !strings.Contains(stderr, want) || !strings.Contains(stderr, unreadable) {
+			t.Errorf("stderr lacks %q or the unreadable path:\n%s", want, stderr)
+		}
+	})
+}
