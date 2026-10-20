@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -291,7 +292,7 @@ func TestOptimize_RefusesBeforeAnyRequest(t *testing.T) {
 		{name: "all without a default tree", setup: func(t *testing.T, _ string) { t.Setenv(envRoot, "") },
 			args: []string{"--all"}, code: exitFailure, stderr: "--all: no default tree of projects configured"},
 		{name: "root missing", setup: func(t *testing.T, project string) { mustRemoveAll(t, project) },
-			code: exitFailure, stderr: "could not resolve the working directory"},
+			code: exitFailure, stderr: deletedCwdRefusal()},
 		{name: "scan problem", files: map[string]string{"dir.md/x": "x"}, code: exitFailure, stderr: "could not read every agent under the root"},
 		{name: "broken link", setup: func(t *testing.T, project string) {
 			if err := os.Symlink(filepath.Join(project, "gone.md"), filepath.Join(project, ".claude", "agents", "b.md")); err != nil {
@@ -628,4 +629,13 @@ func TestOptimize_ApplyRefusesWhatAgentsyncLeavesAlone(t *testing.T) {
 	if code != exitFailure || !strings.Contains(stdout, "s: not written: the state file could not be read") || strings.Contains(stderr, "warning") {
 		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
+}
+
+// deletedCwdRefusal is how a deleted working directory is refused: Linux getwd
+// fails outright, while macOS returns the stale path, which then fails to resolve.
+func deletedCwdRefusal() string {
+	if runtime.GOOS == "linux" {
+		return "could not determine the working directory"
+	}
+	return "could not resolve the working directory"
 }
