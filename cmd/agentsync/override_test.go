@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+
+	"github.com/agentic-tooling/agentsync/internal/testfs"
 )
 
 func runHookWith(t *testing.T, stdin string, args ...string) (code int, stdout, stderr string) {
@@ -91,7 +94,8 @@ func overrideFixture(t *testing.T) (project, repoRoot, settings string) {
 
 func overrideCLI(t *testing.T, project, repoRoot string, args ...string) (int, string, string) {
 	t.Helper()
-	return runCLI(t, append([]string{"override", "--root", project, "--repo", repoRoot}, args...)...)
+	inProject(t, repoRoot, project)
+	return runCLI(t, append([]string{"override"}, args...)...)
 }
 
 func assertAbsent(t *testing.T, path string) {
@@ -238,7 +242,7 @@ func TestOverride_RefusesWithoutWriting(t *testing.T) {
 
 	t.Run("no repo", func(t *testing.T) {
 		useConfig(t, "")
-		if code, _, _ := runCLI(t, "override", "--root", project); code != exitFailure {
+		if code, _, _ := runCLI(t, "override"); code != exitFailure {
 			t.Errorf("exit %d, want 2", code)
 		}
 	})
@@ -255,24 +259,24 @@ const oneOverride = `{"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type"
 func TestScan_ShowsOverrides(t *testing.T) {
 	project, repoRoot, settings := overrideFixture(t)
 	mustWriteT(t, settings, oneOverride)
-	code, stdout, stderr := runCLI(t, scanArgs(repoRoot, project)...)
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, project)...)
 	if code != exitOK || !strings.Contains(stdout, "override: sonnet / -") || !strings.Contains(stdout, "override: - / max") {
 		t.Fatalf("exit %d\n%s%s", code, stdout, stderr)
 	}
 
 	mustWriteT(t, settings, "{")
-	code, stdout, stderr = runCLI(t, scanArgs(repoRoot, project)...)
+	code, stdout, stderr = runCLI(t, scanArgs(t, repoRoot, project)...)
 	if code != exitOK || strings.Contains(stdout, "override:") || !strings.Contains(stderr, "warning: overrides not shown") {
 		t.Fatalf("unreadable settings: exit %d\n%s%s", code, stdout, stderr)
 	}
 }
 
 func TestOptimize_NotesProjectOverride(t *testing.T) {
-	project, repoRoot, settings := overrideFixture(t)
+	_, _, settings := overrideFixture(t)
 	mustWriteT(t, settings, oneOverride)
 	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{orFixture(t, "decision-clef.json")}}).start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--agent", "a", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--agent", "a")
 	if code != exitOK {
 		t.Fatalf("exit %d\n%s", code, stderr)
 	}
@@ -314,7 +318,7 @@ func TestDoctor_OverrideNeedsAgentsyncOnPath(t *testing.T) {
 	mustWriteT(t, settings, oneOverride)
 
 	pathWith(t, servesHook)
-	if code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, project)...); code != exitOK || strings.Contains(stdout, "override-cannot-run") {
+	if code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, project)...); code != exitOK || strings.Contains(stdout, "override-cannot-run") {
 		t.Fatalf("hook-capable agentsync on PATH: exit %d\n%s%s", code, stdout, stderr)
 	}
 
@@ -324,7 +328,7 @@ func TestDoctor_OverrideNeedsAgentsyncOnPath(t *testing.T) {
 		{"rejects the stored sets", `[ "$*" = "hook claude-agent" ] || exit 1`, "fails as the override hook (exit status 1)"},
 	} {
 		pathWith(t, tc.script)
-		code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, project)...)
+		code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, project)...)
 		if code != exitAtRisk {
 			t.Fatalf("%s: exit %d, want 1\n%s%s", tc.name, code, stdout, stderr)
 		}
@@ -337,24 +341,43 @@ func TestDoctor_OverrideNeedsAgentsyncOnPath(t *testing.T) {
 
 	pathWith(t, servesHook)
 	mustWriteT(t, settings, "{")
-	code, stdout, _ := runCLI(t, doctorArgs(repoRoot, project)...)
+	code, stdout, _ := runCLI(t, doctorArgs(t, repoRoot, project)...)
 	if code != exitFailure || !strings.Contains(stdout, "settings.local.json") {
 		t.Fatalf("unreadable settings: exit %d, want 2\n%s", code, stdout)
 	}
 
 	mustRemoveAll(t, settings)
-	if code, stdout, _ := runCLI(t, doctorArgs(repoRoot, project)...); code != exitOK {
+	if code, stdout, _ := runCLI(t, doctorArgs(t, repoRoot, project)...); code != exitOK {
 		t.Fatalf("no overrides: exit %d, want 0\n%s", code, stdout)
 	}
 }
 
-func TestOverride_RootThatCannotBeScanned(t *testing.T) {
+// TestRequireAgent_UnscannableRootRefuses: a root the scan cannot read leaves
+// the agent name unchecked, so it refuses rather than reporting "no agent". The
+// cwd walk cannot reach such a root as uid 0, so this calls requireAgent.
+func TestRequireAgent_UnscannableRootRefuses(t *testing.T) {
 	_, repoRoot, _ := overrideFixture(t)
-	missing := filepath.Join(t.TempDir(), "gone")
-	if code, _, stderr := overrideCLI(t, missing, repoRoot, "--agent", "a", "--model", "opus"); code != exitFailure || stderr == "" {
-		t.Fatalf("exit %d, stderr %q; want 2", code, stderr)
+	root, _ := testfs.UnreadableSubtree(t, t.TempDir())
+
+	err := requireAgent(mustRepo(t, repoRoot), root, filepath.Join(root, ".claude", "agents"), "a")
+	if want := fmt.Sprintf("walking %q: ", root); err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("err = %v, want the scan error starting %s", err, want)
 	}
-	assertAbsent(t, missing)
+}
+
+// TestOverride_OutsideAProjectDoesNotSuggestAll: override refuses --all, so its
+// refusal must not offer --all as the way out.
+func TestOverride_OutsideAProjectDoesNotSuggestAll(t *testing.T) {
+	project, repoRoot, _ := overrideFixture(t)
+	inProject(t, repoRoot, filepath.Dir(project))
+
+	code, _, stderr := runCLI(t, "override")
+	if code != exitFailure || !strings.Contains(stderr, "no project found") {
+		t.Errorf("exit %d, stderr %q; want 2 and the no-project refusal", code, stderr)
+	}
+	if strings.Contains(stderr, "--"+allFlag) {
+		t.Errorf("the refusal suggests --%s, which override refuses:\n%s", allFlag, stderr)
+	}
 }
 
 func TestOverride_MatchesFrontmatterName(t *testing.T) {
@@ -372,7 +395,7 @@ func TestOverride_MatchesFrontmatterName(t *testing.T) {
 	if code, stdout, stderr := overrideCLI(t, project, repoRoot, "--agent", "code-reviewer", "--model", "opus", "--apply"); code != exitOK {
 		t.Fatalf("exit %d\n%s%s", code, stdout, stderr)
 	}
-	if code, stdout, _ := runCLI(t, scanArgs(repoRoot, project)...); code != exitOK || !strings.Contains(stdout, "reviewer                      UNPROTECTED  override: opus / -") {
+	if code, stdout, _ := runCLI(t, scanArgs(t, repoRoot, project)...); code != exitOK || !strings.Contains(stdout, "reviewer                      UNPROTECTED  override: opus / -") {
 		t.Fatalf("scan: exit %d\n%s", code, stdout)
 	}
 }
@@ -405,7 +428,7 @@ func TestScan_OverrideStaysInItsProject(t *testing.T) {
 	project, repoRoot, settings := overrideFixture(t)
 	mustWriteT(t, settings, oneOverride)
 	mustWriteT(t, filepath.Join(project, "sub", ".claude", "agents", "a.md"), agentFile("a", "haiku", "low"))
-	code, stdout, _ := runCLI(t, scanArgs(repoRoot, project)...)
+	code, stdout, _ := runCLI(t, scanArgs(t, repoRoot, project)...)
 	if code != exitOK || strings.Count(stdout, "override: sonnet / -") != 1 {
 		t.Fatalf("exit %d; want the override on the root project's a only\n%s", code, stdout)
 	}
@@ -419,10 +442,10 @@ func TestSymlinkedSettings_ReadOnlyCommandsFollowIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	pathWith(t, "")
-	if code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, project)...); code != exitOK || strings.Contains(stderr, "settings") {
+	if code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, project)...); code != exitOK || strings.Contains(stderr, "settings") {
 		t.Fatalf("doctor: exit %d\n%s%s", code, stdout, stderr)
 	}
-	if code, stdout, stderr := runCLI(t, scanArgs(repoRoot, project)...); code != exitOK || strings.Contains(stderr, "warning: overrides") {
+	if code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, project)...); code != exitOK || strings.Contains(stderr, "warning: overrides") {
 		t.Fatalf("scan: exit %d\n%s%s", code, stdout, stderr)
 	}
 

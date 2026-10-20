@@ -4,7 +4,7 @@
 |---|---|
 | `0` | clean |
 | `1` | the run completed and found something a human must settle |
-| `2` | agentsync could not do its job: bad flags, missing configuration, an unreadable path, a refused write |
+| `2` | agentsync could not do its job: an unknown flag or a stray argument, missing configuration, an unreadable path, a refused write |
 
 What counts as exit 1, by command:
 

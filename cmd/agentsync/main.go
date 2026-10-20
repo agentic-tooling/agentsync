@@ -50,6 +50,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -74,26 +75,20 @@ Usage:
   agentsync override [flags]  set this checkout's model and effort for a Claude agent
   agentsync version
 
+Every command but init and inventory works on the project the working
+directory is in: the first ancestor below $HOME holding .claude/agents/, else
+.claude/, else .git/. For link that also selects the project as if --project
+had named it. Nothing found before $HOME is refused rather than widened. To
+work on a different project, run the command from inside it. Every run prints
+the root it chose and how it decided.
+
+The canonical agent repo comes from $AGENTSYNC_REPO, else repo in the config
+file; one of the two is required.
+
 Common flags:
-  --root PATH       directory tree to scan for projects. Without it the root is
-                    derived from the working directory: the first ancestor
-                    below $HOME holding .claude/agents/, else .claude/, else
-                    .git/ — so running inside a project means that project, and
-                    for link it also selects that project as if --project had
-                    named it. Nothing found before $HOME is refused rather
-                    than widened: pass --all or --root to scan from there.
-                    Every run prints the root it chose and how it decided.
   --all             scan the whole default tree ($AGENTSYNC_ROOT, else root in the
                     config file) rather than the project the working directory
-                    is in. Refused together with --root: the two say different
-                    things and neither should quietly win.
-
-inventory is the one command that does NOT derive a root: it describes the whole
-machine by definition, so --root still names a tree but the default is the whole
-default tree and never the project you are standing in. --all is accepted there
-and means what the default already means.
-  --repo PATH       canonical agent repo (default $AGENTSYNC_REPO, else repo in the
-                    config file; required from one of the three)
+                    is in
   --json            emit machine-readable JSON
   --allow-outside-home
                     your projects legitimately live outside $HOME; do not warn
@@ -101,10 +96,16 @@ and means what the default already means.
                     link, reconcile --apply) that every project key falls under
                     _outside-home/
 
+inventory is the one command that does NOT derive a root: it describes the whole
+machine by definition, so it always scans the default tree and never the project
+you are standing in. --all is accepted there and means what the default already
+means.
+
 Config file: $XDG_CONFIG_HOME/agentsync/config.toml, else
-~/.config/agentsync/config.toml. It may set repo and root; a flag beats the
-environment, which beats the file. A file that exists but is broken refuses.
-agentsync init writes it.
+~/.config/agentsync/config.toml. It may set repo and root; $AGENTSYNC_REPO and
+$AGENTSYNC_ROOT beat the file, and both must be absolute paths. A file that
+exists but is broken refuses. agentsync init writes it, and is the one command
+that takes --repo and --root.
 
 init flags:
   --repo PATH       the canonical agent repo to write (must hold agents/)
@@ -246,14 +247,14 @@ unresolved or skipped, or a change was refused; exit 2 when a write failed.
 
 override flags:
   --agent NAME      the agent to override, by its frontmatter name; it must be
-                    in the root's .claude/agents/ (--all is refused)
+                    in the project's .claude/agents/ (--all is refused)
   --model M         haiku, sonnet, opus or fable
   --effort E        low, medium, high, xhigh or max (give --model, --effort or both)
   --clear NAME      remove that agent's override
   --apply           write the change; without it override is a dry run
 
-With no flags, override lists the root's overrides. They live in one
-PreToolUse hook in <root>/.claude/settings.local.json, which Claude Code keeps
+With no flags, override lists the project's overrides. They live in one
+PreToolUse hook in <project>/.claude/settings.local.json, which Claude Code keeps
 per user. The hook runs agentsync from PATH; doctor checks that it can.
 
 scan and doctor are read-only. import writes only into this repo, only with
@@ -350,8 +351,8 @@ const (
 	envRoot = "AGENTSYNC_ROOT"
 )
 
-// loadConfig reads the config file. Callers reach it only once flag and env
-// have left a value unset, so a broken file never blocks a run that named both.
+// loadConfig reads the config file. Callers reach it only once the environment
+// has left a value unset, so a broken file never blocks a run that set both.
 func loadConfig() (config.Config, string, error) {
 	path, err := config.Path()
 	if err != nil {
@@ -361,13 +362,14 @@ func loadConfig() (config.Config, string, error) {
 	return c, path, err
 }
 
-// openRepo resolves the repo by flag, then $AGENTSYNC_REPO, then the config
-// file, and refuses rather than guessing: every link this tool writes points
-// into it. The string returned names where the path came from.
-func openRepo(flagValue string) (*scan.Repo, string, error) {
-	path, from := strings.TrimSpace(flagValue), "--repo"
-	if path == "" {
-		path, from = strings.TrimSpace(os.Getenv(envRepo)), "$"+envRepo
+// openRepo resolves the repo from $AGENTSYNC_REPO, then the config file, and
+// refuses rather than guessing: every link this tool writes points into it. The
+// string returned names where the path came from.
+func openRepo() (*scan.Repo, string, error) {
+	path, from := strings.TrimSpace(os.Getenv(envRepo)), "$"+envRepo
+	// A relative value would name a different repo from every directory.
+	if path != "" && !filepath.IsAbs(path) {
+		return nil, "", fmt.Errorf("$%s must be an absolute path, got %q", envRepo, path)
 	}
 	if path == "" {
 		c, cfgPath, err := loadConfig()
@@ -386,10 +388,32 @@ func openRepo(flagValue string) (*scan.Repo, string, error) {
 	return repo, from, nil
 }
 
-// notConfigured is the refusal for a setting no source supplied. key is both
-// the flag name and the config key.
+// notConfigured is the refusal for a setting neither the environment nor the
+// config file supplied.
 func notConfigured(what, key, env, cfgPath string) error {
-	return fmt.Errorf("no %s configured.\n  Create a config file: agentsync init\n  Pass it each run: --%s PATH (or set $%s)\n  Or set %s in %s", what, key, env, key, cfgPath)
+	return fmt.Errorf("no %s configured.\n  Create a config file: agentsync init\n  Or set $%s\n  Or set %s in %s", what, env, key, cfgPath)
+}
+
+// strayArg is the refusal for a positional argument. One shaped like a path is
+// someone naming a project, so it is told to cd instead; anything else gets the
+// command's own hint, if it has one.
+func strayArg(cmd, arg string, hint func(string) string) string {
+	msg := fmt.Sprintf("unexpected argument %q; %s takes flags only.", arg, cmd)
+	if looksLikePath(arg) {
+		return msg + " Run it from the project directory instead."
+	}
+	if hint != nil {
+		msg += hint(arg)
+	}
+	return msg
+}
+
+func looksLikePath(arg string) bool {
+	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "~") || strings.HasPrefix(arg, ".") {
+		return true
+	}
+	fi, err := os.Stat(arg)
+	return err == nil && fi.IsDir()
 }
 
 // emitRepoChoice prints which repo this run uses and where that came from,
@@ -403,8 +427,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerAll(fs)
 	asJSON := fs.Bool("json", false, "emit JSON")
 	atRiskOnly := fs.Bool("at-risk", false, "list only at-risk entries")
 	failOnRisk := fs.Bool("fail-on-risk", false, "exit 1 if any at-risk entry is found")
@@ -419,14 +442,18 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		// block to stderr. Printing it again would double up.
 		return exitFailure
 	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "agentsync: %s\n", strayArg("scan", fs.Arg(0), nil))
+		return exitFailure
+	}
 
-	repo, repoFrom, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo()
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
 	}
 
-	root, err := rootF.resolve(repo.Home)
+	root, err := resolveRoot(repo.Home, *all)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure

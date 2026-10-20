@@ -13,8 +13,7 @@ import (
 	"github.com/agentic-tooling/agentsync/internal/scan"
 )
 
-// allFlag widens a run back to the whole default tree, so the machine-wide view
-// is discoverable from --help rather than folklore about --root.
+// allFlag widens a run from the project you are in to the whole default tree.
 const allFlag = "all"
 
 // The entries that identify a project directory, in the order the walk tests
@@ -34,7 +33,6 @@ const (
 	// project, so nothing acts on it.
 	rootOriginInvalid rootOrigin = iota
 
-	rootFromFlag    // an explicit --root
 	rootFromAll     // an explicit --all
 	rootFromProject // the project the cwd is in; the one origin implying a project
 	rootFromWide    // the default of a command that never derives one; see resolveWide
@@ -56,31 +54,14 @@ type rootChoice struct {
 	from string
 }
 
-// rootFlags are the two ways a run may name its root, registered together
-// because they are refused together.
-type rootFlags struct {
-	root *string
-	all  *bool
+func registerAll(fs *flag.FlagSet) *bool {
+	return fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+" or root in the config file) instead of the project you are in")
 }
 
-func registerRoot(fs *flag.FlagSet) rootFlags {
-	return rootFlags{
-		root: fs.String("root", "",
-			"directory tree to scan (default: the project the working directory is in)"),
-		all: fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+" or root in the config file) instead of the project you are in"),
-	}
-}
-
-// registerWideRoot registers the same pair for a command that never narrows.
-// --all is accepted, meaning what the default already means, so the flag reads
-// the same on every command rather than being missing from one. It differs from
-// registerRoot in help text only: resolveWide enforces the exemption, and this
-// is not a safety boundary.
-func registerWideRoot(fs *flag.FlagSet) rootFlags {
-	return rootFlags{
-		root: fs.String("root", "", "directory tree to scan (default: the whole tree, $"+envRoot+" or root in the config file)"),
-		all:  fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+" or root in the config file), which is already the default here"),
-	}
+// registerWideAll registers --all for inventory, where it means the default,
+// so the flag reads the same on every command.
+func registerWideAll(fs *flag.FlagSet) *bool {
+	return fs.Bool(allFlag, false, "scan the whole default tree ($"+envRoot+" or root in the config file), which is already the default here")
 }
 
 // wideRoot is the whole default tree, from $AGENTSYNC_ROOT or else the config
@@ -104,45 +85,22 @@ func wideRoot() (path, from string, err error) {
 	return c.Root, "config file " + cfgPath, nil
 }
 
-// settled returns the choice the flags decide with no derivation of any kind.
-// Origin is rootOriginInvalid when neither settled it, leaving the meaning of
-// their absence to the caller — all the two resolvers below disagree about.
-func (f rootFlags) settled(home string) (rootChoice, error) {
-	// Trimmed to empty counts as absent: filepath.Abs("") is the working
-	// directory, so honouring it would scan somewhere nobody named.
-	explicit := strings.TrimSpace(*f.root)
-	if explicit != "" && *f.all {
-		return rootChoice{}, fmt.Errorf("--root and --%s are mutually exclusive: --%s is the whole default tree, so naming a root as well says two different things",
-			allFlag, allFlag)
+// resolveAll is the whole default tree, as --all names it.
+func resolveAll() (rootChoice, error) {
+	p, from, err := wideRoot()
+	if err != nil {
+		return rootChoice{}, fmt.Errorf("--%s: %w", allFlag, err)
 	}
-	if explicit != "" {
-		return rootChoice{Path: explicit, Origin: rootFromFlag}, nil
-	}
-	if home == "" {
-		return rootChoice{}, fmt.Errorf("no home directory, so project keys and the walk up from the working directory cannot be worked out; pass --root PATH")
-	}
-	if *f.all {
-		p, from, err := wideRoot()
-		if err != nil {
-			return rootChoice{}, fmt.Errorf("--%s: %w", allFlag, err)
-		}
-		return rootChoice{Path: p, Origin: rootFromAll, from: from}, nil
-	}
-	return rootChoice{}, nil
+	return rootChoice{Path: p, Origin: rootFromAll, from: from}, nil
 }
 
-// resolveWide decides the root for a command that must never narrow: --root if
-// given, the machine-wide tree otherwise, with no walk up from the cwd.
-//
-// inventory is the only caller, and the exemption is deliberate. Its document
-// is every agent on this machine by definition, so a project-scoped one is not
-// a narrower view of it but a different document under the same name, and
-// regenerating that from inside a project overwrites the real file. --check
-// failing safe does not save it: its message names the overwriting command.
-func (f rootFlags) resolveWide(home string) (rootChoice, error) {
-	c, err := f.settled(home)
-	if err != nil || c.Origin != rootOriginInvalid {
-		return c, err
+// resolveWide decides the root for inventory, which never narrows. Its document
+// is every agent on this machine, so a project-scoped one would be a different
+// document under the same name, and regenerating it inside a project would
+// overwrite the real file.
+func resolveWide(all bool) (rootChoice, error) {
+	if all {
+		return resolveAll()
 	}
 	p, from, err := wideRoot()
 	if err != nil {
@@ -151,17 +109,30 @@ func (f rootFlags) resolveWide(home string) (rootChoice, error) {
 	return rootChoice{Path: p, Origin: rootFromWide, from: from}, nil
 }
 
-// resolve decides the root, given the resolved home directory project keys are
-// expressed against. Absent both flags, it derives one from the cwd.
-func (f rootFlags) resolve(home string) (rootChoice, error) {
-	c, err := f.settled(home)
-	if err != nil || c.Origin != rootOriginInvalid {
-		return c, err
+// resolveRoot decides the root: --all, else the project the cwd is in. Only
+// the walk needs home; a wide run with none is left to the home warning and the
+// write guards.
+func resolveRoot(home string, all bool) (rootChoice, error) {
+	if all {
+		return resolveAll()
+	}
+	c, err := resolveProject(home)
+	if err != nil {
+		return rootChoice{}, fmt.Errorf("%w; or pass --%s to scan the whole default tree ($%s or root in the config file)", err, allFlag, envRoot)
+	}
+	return c, nil
+}
+
+// resolveProject is the project the cwd is in, found by a walk that stops at
+// home. Its refusals name no flag, because override takes no --all.
+func resolveProject(home string) (rootChoice, error) {
+	if home == "" {
+		return rootChoice{}, errors.New("no home directory, so the walk up from the working directory has nowhere to stop; set $HOME")
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		return rootChoice{}, fmt.Errorf("could not determine the working directory, so the root cannot be derived from it (%w); pass --root PATH or --%s", err, allFlag)
+		return rootChoice{}, fmt.Errorf("could not determine the working directory, so the project cannot be derived from it (%w)", err)
 	}
 	dir, marker, err := detectProject(home, cwd)
 	if err != nil {
@@ -170,7 +141,7 @@ func (f rootFlags) resolve(home string) (rootChoice, error) {
 	// A new project has no marker yet, and widening to the whole tree from there
 	// would scan every project on the machine; --all is the explicit way to ask.
 	if dir == "" {
-		return rootChoice{}, fmt.Errorf("no project found above the working directory, so nothing was scanned; run inside a project or create its .claude/agents/, or pass --%s to scan the whole tree ($%s or root in the config file) or --root PATH", allFlag, envRoot)
+		return rootChoice{}, errors.New("no project found above the working directory, so nothing was scanned; run inside a project or create its .claude/agents/")
 	}
 	return rootChoice{
 		Path:    dir,
@@ -195,12 +166,12 @@ func detectProject(home, cwd string) (dir, marker string, err error) {
 	// a walk from it finds nothing at every level and calls that a clean result.
 	cur, err := resolveDir(cwd)
 	if err != nil {
-		return "", "", fmt.Errorf("could not resolve the working directory %q (%w); pass --root PATH or --%s", cwd, err, allFlag)
+		return "", "", fmt.Errorf("could not resolve the working directory %q (%w)", cwd, err)
 	}
 	for cur != home && filepath.Dir(cur) != cur {
 		m, err := markerAt(cur)
 		if err != nil {
-			return "", "", fmt.Errorf("could not read %q while deriving the root from the working directory (%w); pass --root PATH or --%s", cur, err, allFlag)
+			return "", "", fmt.Errorf("could not read %q while deriving the root from the working directory (%w)", cur, err)
 		}
 		if m != "" {
 			return cur, m, nil
@@ -282,10 +253,8 @@ func emitRootChoice(w io.Writer, home string, c rootChoice) {
 	switch c.Origin {
 	case rootOriginInvalid:
 		// Nothing was resolved, so there is nothing to name.
-	case rootFromFlag:
-		fmt.Fprintf(w, "Root: %s (from --root).\n", shown)
 	case rootFromProject:
-		fmt.Fprintf(w, "Root: %s (from the current directory, which is in a project: %s) — pass --root PATH or --%s to widen.\n",
+		fmt.Fprintf(w, "Root: %s (from the current directory, which is in a project: %s) — pass --%s to widen.\n",
 			shown, c.marker, allFlag)
 	case rootFromAll:
 		fmt.Fprintf(w, "Root: %s (from --%s: the whole default tree, %s).\n", shown, allFlag, c.from)

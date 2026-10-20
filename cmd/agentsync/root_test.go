@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -121,8 +122,8 @@ func TestDetectProject_UnreadableDirectoryRefuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("a directory that cannot be read was treated as a clean negative")
 	}
-	if !strings.Contains(err.Error(), "--root") || !strings.Contains(err.Error(), "--"+allFlag) {
-		t.Errorf("the refusal does not name a way out:\n%v", err)
+	if !strings.Contains(err.Error(), "could not") {
+		t.Errorf("the refusal does not say the walk failed:\n%v", err)
 	}
 }
 
@@ -146,8 +147,8 @@ func TestDetectProject_UnresolvableCwdRefuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("a working directory that no longer exists was walked as if it did")
 	}
-	if !strings.Contains(err.Error(), "--root") || !strings.Contains(err.Error(), "--"+allFlag) {
-		t.Errorf("the refusal does not name a way out:\n%v", err)
+	if !strings.Contains(err.Error(), "could not") {
+		t.Errorf("the refusal does not say the walk failed:\n%v", err)
 	}
 }
 
@@ -163,45 +164,21 @@ func TestResolveDir(t *testing.T) {
 	}
 }
 
-// --- resolving the flags ----------------------------------------------------
+// --- resolving the root ----------------------------------------------------
 
-func resolveWith(t *testing.T, home, root string, all bool) (rootChoice, error) {
-	t.Helper()
-	return rootFlags{root: &root, all: &all}.resolve(home)
-}
-
-func TestRootFlags_Resolve(t *testing.T) {
+func TestResolveRoot(t *testing.T) {
 	home := t.TempDir()
 	wide := filepath.Join(home, "Web")
 	mustMkdirT(t, wide)
 	t.Chdir(wide)
 	t.Setenv(envRoot, wide)
 
-	t.Run("explicit root wins and is reported as such", func(t *testing.T) {
-		got, err := resolveWith(t, home, "/somewhere", false)
-		if err != nil {
-			t.Fatalf("resolve: %v", err)
-		}
-		if got.Path != "/somewhere" || got.Origin != rootFromFlag || got.Project != "" {
-			t.Errorf("resolve = %+v, want /somewhere from the flag and no implied project", got)
-		}
-	})
-
-	t.Run("an empty root counts as absent", func(t *testing.T) {
-		// filepath.Abs("") is the working directory, so honouring an empty
-		// value would scan somewhere the user never named.
-		got, err := resolveWith(t, home, "  ", false)
-		if err == nil || !strings.Contains(err.Error(), "no project found") {
-			t.Errorf("resolve = %+v, %v; want the no-project refusal", got, err)
-		}
-	})
-
 	t.Run("no project marker refuses rather than widening", func(t *testing.T) {
-		got, err := resolveWith(t, home, "", false)
+		got, err := resolveRoot(home, false)
 		if err == nil {
 			t.Fatalf("resolve = %+v, want a refusal: a markerless directory widened to the whole tree", got)
 		}
-		for _, w := range []string{"no project found", "--" + allFlag, "--root"} {
+		for _, w := range []string{"no project found", "--" + allFlag} {
 			if !strings.Contains(err.Error(), w) {
 				t.Errorf("refusal does not name %q:\n%v", w, err)
 			}
@@ -209,7 +186,7 @@ func TestRootFlags_Resolve(t *testing.T) {
 	})
 
 	t.Run("--all is the whole default tree", func(t *testing.T) {
-		got, err := resolveWith(t, home, "", true)
+		got, err := resolveRoot(home, true)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -218,41 +195,28 @@ func TestRootFlags_Resolve(t *testing.T) {
 		}
 	})
 
-	t.Run("--root with --all is refused, not resolved by precedence", func(t *testing.T) {
-		_, err := resolveWith(t, home, "/somewhere", true)
-		if err == nil {
-			t.Fatal("--root and --all together were accepted")
+	t.Run("no home refuses the walk but not --all", func(t *testing.T) {
+		_, err := resolveRoot("", false)
+		if err == nil || !strings.Contains(err.Error(), "no home directory") || !strings.Contains(err.Error(), "--"+allFlag) {
+			t.Errorf("err = %v, want the no-home refusal naming --%s", err, allFlag)
 		}
-		if !strings.Contains(err.Error(), "mutually exclusive") {
-			t.Errorf("refusal does not say why:\n%v", err)
-		}
-	})
-
-	t.Run("no home refuses rather than guessing", func(t *testing.T) {
-		_, err := resolveWith(t, "", "", false)
-		if err == nil {
-			t.Fatal("a run with no home directory derived a root anyway")
+		if got, err := resolveRoot("", true); err != nil || got.Origin != rootFromAll {
+			t.Errorf("resolve = %+v, %v; want --all to need no home", got, err)
 		}
 	})
 
 	t.Run("no default tree refuses --all", func(t *testing.T) {
 		t.Setenv(envRoot, "")
-		_, err := resolveWith(t, home, "", true)
-		if err == nil || !strings.Contains(err.Error(), "$"+envRoot) || !strings.Contains(err.Error(), "--root") {
-			t.Errorf("err = %v, want a refusal naming --root and $%s", err, envRoot)
+		_, err := resolveRoot(home, true)
+		if err == nil || !strings.Contains(err.Error(), "$"+envRoot) || !strings.Contains(err.Error(), "--"+allFlag) {
+			t.Errorf("err = %v, want a refusal naming --%s and $%s", err, allFlag, envRoot)
 		}
 	})
 }
 
-func resolveWideWith(t *testing.T, home, root string, all bool) (rootChoice, error) {
-	t.Helper()
-	return rootFlags{root: &root, all: &all}.resolveWide(home)
-}
-
-// TestRootFlags_ResolveWideNeverDerives: the resolver inventory uses shares
-// every flag rule with the other one and differs in exactly one place — what
-// the absence of both flags means.
-func TestRootFlags_ResolveWide(t *testing.T) {
+// TestResolveWide: inventory's resolver differs from resolveRoot in exactly one
+// place, what the absence of --all means.
+func TestResolveWide(t *testing.T) {
 	home := t.TempDir()
 	wide := filepath.Join(home, "Web")
 	project := filepath.Join(home, "Web", "toolbox")
@@ -263,7 +227,7 @@ func TestRootFlags_ResolveWide(t *testing.T) {
 	t.Setenv(envRoot, wide)
 
 	t.Run("no flags is the whole tree, not the project underfoot", func(t *testing.T) {
-		got, err := resolveWideWith(t, home, "", false)
+		got, err := resolveWide(false)
 		if err != nil {
 			t.Fatalf("resolveWide: %v", err)
 		}
@@ -273,9 +237,8 @@ func TestRootFlags_ResolveWide(t *testing.T) {
 		if got.Project != "" {
 			t.Errorf("implied project = %q, want none: this command selects no project", got.Project)
 		}
-		// The other resolver, same directory, to prove the fixture really is
-		// one that narrows — otherwise this test would pass on a broken walk.
-		derived, err := resolveWith(t, mustResolveDir(t, home), "", false)
+		// The other resolver, same directory, proves the fixture really narrows.
+		derived, err := resolveRoot(mustResolveDir(t, home), false)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -285,7 +248,7 @@ func TestRootFlags_ResolveWide(t *testing.T) {
 	})
 
 	t.Run("--all is accepted and means the default", func(t *testing.T) {
-		got, err := resolveWideWith(t, home, "", true)
+		got, err := resolveWide(true)
 		if err != nil {
 			t.Fatalf("resolveWide: %v", err)
 		}
@@ -294,53 +257,31 @@ func TestRootFlags_ResolveWide(t *testing.T) {
 		}
 	})
 
-	t.Run("an explicit root still wins", func(t *testing.T) {
-		got, err := resolveWideWith(t, home, "/somewhere", false)
-		if err != nil {
-			t.Fatalf("resolveWide: %v", err)
-		}
-		if got.Path != "/somewhere" || got.Origin != rootFromFlag {
-			t.Errorf("resolveWide = %+v, want /somewhere from the flag", got)
-		}
-	})
-
-	t.Run("--root with --all is still refused", func(t *testing.T) {
-		if _, err := resolveWideWith(t, home, "/somewhere", true); err == nil {
-			t.Fatal("--root and --all together were accepted")
-		}
-	})
-
-	t.Run("no home still refuses", func(t *testing.T) {
-		if _, err := resolveWideWith(t, "", "", false); err == nil {
-			t.Fatal("a run with no home directory produced a root anyway")
-		}
-	})
-
 	t.Run("no default tree refuses", func(t *testing.T) {
 		t.Setenv(envRoot, "")
-		if _, err := resolveWideWith(t, home, "", false); err == nil {
+		if _, err := resolveWide(false); err == nil {
 			t.Fatal("an unset default tree produced a root anyway")
 		}
 	})
 
 	t.Run("relative default tree refuses", func(t *testing.T) {
 		t.Setenv(envRoot, ".")
-		if _, err := resolveWideWith(t, home, "", false); err == nil || !strings.Contains(err.Error(), "absolute") {
+		if _, err := resolveWide(false); err == nil || !strings.Contains(err.Error(), "absolute") {
 			t.Fatalf("err = %v, want a refusal naming an absolute path", err)
 		}
 	})
 }
 
-// TestRootFlags_ResolveDerivesAndImpliesTheProject: the derived root carries
-// the project key with it, which is what lets link fill --project in rather
-// than relax the rule that requires it.
-func TestRootFlags_ResolveDerivesAndImpliesTheProject(t *testing.T) {
+// TestResolveRoot_DerivesAndImpliesTheProject: the derived root carries the
+// project key with it, which is what lets link fill --project in rather than
+// relax the rule that requires it.
+func TestResolveRoot_DerivesAndImpliesTheProject(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(home, "Web", "toolbox")
 	mustMkdirT(t, filepath.Join(project, ".claude"))
 	t.Chdir(project)
 
-	got, err := resolveWith(t, mustResolveDir(t, home), "", false)
+	got, err := resolveRoot(mustResolveDir(t, home), false)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -355,15 +296,17 @@ func TestRootFlags_ResolveDerivesAndImpliesTheProject(t *testing.T) {
 	}
 }
 
-func TestRegisterRoot(t *testing.T) {
-	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	fs.SetOutput(&bytes.Buffer{})
-	f := registerRoot(fs)
-	if err := fs.Parse([]string{"--root", "/x", "--" + allFlag}); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if *f.root != "/x" || !*f.all {
-		t.Errorf("registerRoot did not bind both flags: root=%q all=%v", *f.root, *f.all)
+func TestRegisterAll(t *testing.T) {
+	for name, register := range map[string]func(*flag.FlagSet) *bool{"registerAll": registerAll, "registerWideAll": registerWideAll} {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		fs.SetOutput(&bytes.Buffer{})
+		all := register(fs)
+		if err := fs.Parse([]string{"--" + allFlag}); err != nil {
+			t.Fatalf("%s: parse: %v", name, err)
+		}
+		if !*all {
+			t.Errorf("%s did not bind --%s", name, allFlag)
+		}
 	}
 }
 
@@ -378,19 +321,15 @@ func TestEmitRootChoice(t *testing.T) {
 		notWant []string
 	}{
 		{
-			name:   "flag",
-			choice: rootChoice{Path: "/somewhere", Origin: rootFromFlag},
-			want:   []string{"Root: /somewhere", "--root"},
-		},
-		{
-			name:   "derived names the marker and how to widen",
-			choice: rootChoice{Path: "/home/u/Web/toolbox", Origin: rootFromProject, marker: markerClaude},
-			want:   []string{"~/Web/toolbox", "current directory", markerClaude, "--all"},
+			name:    "derived names the marker and how to widen",
+			choice:  rootChoice{Path: "/home/u/Web/toolbox", Origin: rootFromProject, marker: markerClaude},
+			want:    []string{"Root: ~/Web/toolbox (from the current directory, which is in a project: .claude) — pass --all to widen."},
+			notWant: []string{"--root"},
 		},
 		{
 			name:   "all",
-			choice: rootChoice{Path: "/home/u/Web", Origin: rootFromAll},
-			want:   []string{"~/Web", "--all"},
+			choice: rootChoice{Path: "/home/u/Web", Origin: rootFromAll, from: "$AGENTSYNC_ROOT"},
+			want:   []string{"Root: ~/Web (from --all: the whole default tree, $AGENTSYNC_ROOT)."},
 		},
 		{
 			name:   "all names the config file it came from",
@@ -491,18 +430,19 @@ func projectScopeFixture(t *testing.T) (home, repoRoot string) {
 	mustWriteT(t, filepath.Join(home, "Web", "beta", ".claude", "agents", "b.md"), "b\n")
 	// Resolved, so the root displays under ~ the way the resolved home does.
 	t.Setenv(envRoot, filepath.Join(mustResolveDir(t, home), "Web"))
+	t.Setenv(envRepo, repoRoot)
 	return home, repoRoot
 }
 
 func TestRun_RepoIsRequired(t *testing.T) {
 	t.Setenv(envRepo, "")
 	for _, cmd := range []string{"scan", "import", "link", "doctor", "reconcile", "inventory"} {
-		code, stdout, stderr := runCLI(t, cmd, "--root", t.TempDir())
+		code, stdout, stderr := runCLI(t, cmd, "--"+allFlag)
 		if code != exitFailure {
 			t.Errorf("%s: exit = %d, want %d with no repo named", cmd, code, exitFailure)
 		}
-		if !strings.Contains(stderr, "--repo") || !strings.Contains(stderr, "$"+envRepo) || !strings.Contains(stderr, "agentsync init") {
-			t.Errorf("%s: the refusal does not name --repo, $%s and agentsync init:\n%s", cmd, envRepo, stderr)
+		if !strings.Contains(stderr, "$"+envRepo) || !strings.Contains(stderr, "agentsync init") {
+			t.Errorf("%s: the refusal does not name $%s and agentsync init:\n%s", cmd, envRepo, stderr)
 		}
 		if stdout != "" {
 			t.Errorf("%s: a refused run must not emit a report:\n%s", cmd, stdout)
@@ -531,11 +471,11 @@ func scanProjects(t *testing.T, stdout string) []string {
 // TestRunScan_RootFollowsTheWorkingDirectory is the complaint itself: standing
 // in one project and getting a machine-wide report.
 func TestRunScan_RootFollowsTheWorkingDirectory(t *testing.T) {
-	home, repoRoot := projectScopeFixture(t)
+	home, _ := projectScopeFixture(t)
 
 	t.Run("inside a project reports that project alone", func(t *testing.T) {
 		t.Chdir(filepath.Join(home, "Web", "alpha"))
-		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot, "--json")
+		code, stdout, stderr := runCLI(t, "scan", "--json")
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s", code, exitOK, stderr)
 		}
@@ -554,7 +494,7 @@ func TestRunScan_RootFollowsTheWorkingDirectory(t *testing.T) {
 		for _, args := range [][]string{
 			{"scan"}, {"import"}, {"link", "--agent", "shared"}, {"doctor"}, {"reconcile"},
 		} {
-			code, stdout, stderr := runCLI(t, append(args, "--repo", repoRoot)...)
+			code, stdout, stderr := runCLI(t, args...)
 			if code != exitFailure {
 				t.Errorf("%s: exit = %d, want %d\n%s\n%s", args[0], code, exitFailure, stdout, stderr)
 			}
@@ -569,7 +509,7 @@ func TestRunScan_RootFollowsTheWorkingDirectory(t *testing.T) {
 
 	t.Run("--all from outside any project scans everything", func(t *testing.T) {
 		t.Chdir(filepath.Join(home, "Web"))
-		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot, "--json", "--"+allFlag)
+		code, stdout, stderr := runCLI(t, "scan", "--json", "--"+allFlag)
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s", code, exitOK, stderr)
 		}
@@ -580,7 +520,7 @@ func TestRunScan_RootFollowsTheWorkingDirectory(t *testing.T) {
 
 	t.Run("--all widens from inside a project", func(t *testing.T) {
 		t.Chdir(filepath.Join(home, "Web", "alpha"))
-		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot, "--json", "--"+allFlag)
+		code, stdout, stderr := runCLI(t, "scan", "--json", "--"+allFlag)
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s", code, exitOK, stderr)
 		}
@@ -596,26 +536,19 @@ func TestRunScan_RootFollowsTheWorkingDirectory(t *testing.T) {
 // or a capture would land under a different key depending on where the user was
 // standing when they ran the command.
 func TestRunScan_ProjectKeysDoNotDependOnTheRoot(t *testing.T) {
-	home, repoRoot := projectScopeFixture(t)
+	home, _ := projectScopeFixture(t)
 	project := filepath.Join(home, "Web", "alpha")
 
 	t.Chdir(project)
-	_, narrow, _ := runCLI(t, "scan", "--repo", repoRoot, "--json")
+	_, narrow, _ := runCLI(t, "scan", "--json")
 	narrowKeys := scanProjects(t, narrow)
 
 	t.Chdir(home)
-	_, wide, _ := runCLI(t, "scan", "--repo", repoRoot, "--json", "--"+allFlag)
+	_, wide, _ := runCLI(t, "scan", "--json", "--"+allFlag)
 	wideKeys := scanProjects(t, wide)
-
-	// And a third route to the same project: named explicitly by path.
-	_, explicit, _ := runCLI(t, "scan", "--repo", repoRoot, "--root", project, "--json")
-	explicitKeys := scanProjects(t, explicit)
 
 	if len(narrowKeys) != 1 || narrowKeys[0] != "Web/alpha" {
 		t.Fatalf("narrow run keys = %v, want [Web/alpha]", narrowKeys)
-	}
-	if len(explicitKeys) != 1 || explicitKeys[0] != narrowKeys[0] {
-		t.Errorf("explicit --root keys = %v, want the same key the derived run produced (%v)", explicitKeys, narrowKeys)
 	}
 	found := false
 	for _, k := range wideKeys {
@@ -629,24 +562,113 @@ func TestRunScan_ProjectKeysDoNotDependOnTheRoot(t *testing.T) {
 	}
 }
 
-// TestRun_RootAndAllRefusedByEveryCommand: the refusal is a property of the
-// flag pair, so it must hold wherever the pair is registered.
-func TestRun_RootAndAllRefusedByEveryCommand(t *testing.T) {
+// TestRun_RepoAndRootFlagsAreGone: the project is where you stand and the repo
+// is configured, so naming either per run is an unknown flag.
+func TestRun_RepoAndRootFlagsAreGone(t *testing.T) {
 	_, repoRoot := projectScopeFixture(t)
 
-	for _, cmd := range []string{"scan", "import", "link", "doctor", "reconcile", "inventory"} {
-		t.Run(cmd, func(t *testing.T) {
-			code, stdout, stderr := runCLI(t, cmd, "--repo", repoRoot, "--root", repoRoot, "--"+allFlag)
+	for _, cmd := range []string{"scan", "import", "link", "doctor", "reconcile", "inventory", "optimize", "override"} {
+		for _, f := range []string{"--repo", "--root"} {
+			code, stdout, stderr := runCLI(t, cmd, f, repoRoot)
 			if code != exitFailure {
-				t.Errorf("exit = %d, want %d\n%s", code, exitFailure, stderr)
+				t.Errorf("%s %s: exit = %d, want %d\n%s", cmd, f, code, exitFailure, stderr)
 			}
-			if !strings.Contains(stderr, "mutually exclusive") {
-				t.Errorf("refusal does not say why:\n%s", stderr)
+			if !strings.Contains(stderr, "flag provided but not defined: "+strings.TrimPrefix(f, "-")) {
+				t.Errorf("%s %s: refusal does not name the flag:\n%s", cmd, f, stderr)
 			}
 			if stdout != "" {
-				t.Errorf("a refused run must not emit a report:\n%s", stdout)
+				t.Errorf("%s %s: a refused run must not emit a report:\n%s", cmd, f, stdout)
 			}
-		})
+		}
+	}
+}
+
+// TestRun_StrayArgumentRefused: every command but init takes flags only, and a
+// path-shaped argument is someone trying to name a project, so it is told to cd.
+func TestRun_StrayArgumentRefused(t *testing.T) {
+	home, _ := projectScopeFixture(t)
+	t.Chdir(filepath.Join(home, "Web"))
+	const cdHint = "Run it from the project directory instead."
+
+	for _, cmd := range []string{"scan", "import", "link", "doctor", "reconcile", "inventory", "optimize", "override"} {
+		for _, tc := range []struct {
+			arg    string
+			wantCD bool
+		}{
+			{"someagent", false},
+			{filepath.Join(home, "Web", "alpha"), true},
+			{"./alpha", true},
+			{"~/Web/alpha", true},
+			{"..", true},
+			{"alpha", true}, // an existing directory, relative to the cwd
+		} {
+			code, stdout, stderr := runCLI(t, cmd, tc.arg)
+			if code != exitFailure {
+				t.Errorf("%s %s: exit = %d, want %d", cmd, tc.arg, code, exitFailure)
+			}
+			if want := fmt.Sprintf("agentsync: unexpected argument %q; %s takes flags only.", tc.arg, cmd); !strings.HasPrefix(stderr, want) {
+				t.Errorf("%s %s: stderr = %q, want it to start %q", cmd, tc.arg, stderr, want)
+			}
+			if got := strings.Contains(stderr, cdHint); got != tc.wantCD {
+				t.Errorf("%s %s: cd hint = %v, want %v:\n%s", cmd, tc.arg, got, tc.wantCD, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("%s %s: a refused run must not emit a report:\n%s", cmd, tc.arg, stdout)
+			}
+		}
+	}
+}
+
+// TestRun_StrayArgumentHintsAreExclusive: the selector hints fire for a
+// <project>/<name> pair and never for a path, which gets the cd hint alone.
+func TestRun_StrayArgumentHintsAreExclusive(t *testing.T) {
+	projectScopeFixture(t)
+	for _, tc := range []struct{ cmd, flag string }{
+		{"link", "--" + linker.UndeclineFlag + "="},
+		{"import", "--update="},
+		{"reconcile", "--" + reconcile.DropCaptureFlag + "="},
+	} {
+		_, _, stderr := runCLI(t, tc.cmd, "Web/proj/a")
+		if !strings.Contains(stderr, tc.flag+"Web/proj/a") || strings.Contains(stderr, "project directory") {
+			t.Errorf("%s with a selector: want the %s hint alone:\n%s", tc.cmd, tc.flag, stderr)
+		}
+		_, _, stderr = runCLI(t, tc.cmd, "/abs/path")
+		if strings.Contains(stderr, tc.flag) || !strings.Contains(stderr, "project directory") {
+			t.Errorf("%s with a path: want the cd hint alone:\n%s", tc.cmd, stderr)
+		}
+	}
+}
+
+// TestRunScan_PathArgumentDoesNotScanTheCwd: scan once ignored a stray argument,
+// so naming another project from inside one silently scanned the wrong one.
+func TestRunScan_PathArgumentDoesNotScanTheCwd(t *testing.T) {
+	home, _ := projectScopeFixture(t)
+	t.Chdir(filepath.Join(home, "Web", "alpha"))
+
+	code, stdout, stderr := runCLI(t, "scan", "--fail-on-risk", filepath.Join(home, "Web", "beta"))
+	if code != exitFailure {
+		t.Errorf("exit = %d, want %d", code, exitFailure)
+	}
+	if stdout != "" || !strings.Contains(stderr, "Run it from the project directory instead.") {
+		t.Errorf("want a refusal and no report:\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+}
+
+// TestRun_RelativeRepoEnvRefused: a relative $AGENTSYNC_REPO names a different
+// repo from every directory, so every command refuses it rather than guess.
+func TestRun_RelativeRepoEnvRefused(t *testing.T) {
+	home, _ := projectScopeFixture(t)
+	t.Chdir(filepath.Join(home, "Web", "alpha"))
+	t.Setenv(envRepo, "Web/agents-repo")
+
+	for _, cmd := range []string{"scan", "import", "link", "doctor", "reconcile", "inventory", "override"} {
+		code, stdout, stderr := runCLI(t, cmd)
+		if code != exitFailure || !strings.Contains(stderr, "$"+envRepo+" must be an absolute path") {
+			t.Errorf("%s: exit = %d, want %d naming $%s:\n%s", cmd, code, exitFailure, envRepo, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("%s: a refused run must not emit a report:\n%s", cmd, stdout)
+		}
 	}
 }
 
@@ -669,7 +691,7 @@ func TestRunLink_DerivedRootImpliesProject(t *testing.T) {
 	t.Chdir(project)
 
 	t.Run("the dry run creates nothing", func(t *testing.T) {
-		code, stdout, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared")
+		code, stdout, stderr := runCLI(t, "link", "--agent", "shared")
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 		}
@@ -685,7 +707,7 @@ func TestRunLink_DerivedRootImpliesProject(t *testing.T) {
 	})
 
 	t.Run("apply creates the missing agents directory and the link", func(t *testing.T) {
-		code, stdout, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply")
+		code, stdout, stderr := runCLI(t, "link", "--agent", "shared", "--apply")
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 		}
@@ -708,7 +730,7 @@ func TestRunLink_DerivedRootImpliesProject(t *testing.T) {
 	})
 
 	t.Run("a second apply changes nothing and says nothing about restarting", func(t *testing.T) {
-		code, stdout, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply")
+		code, stdout, stderr := runCLI(t, "link", "--agent", "shared", "--apply")
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 		}
@@ -726,7 +748,7 @@ func TestRunLink_WideRootStillRefusesAgentWithoutProject(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", "canonical\n")
 	t.Chdir(filepath.Join(home, "Web"))
 
-	code, stdout, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply", "--"+allFlag)
+	code, stdout, stderr := runCLI(t, "link", "--agent", "shared", "--apply", "--"+allFlag)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d: --agent with no project selected must be refused", code, exitFailure)
 	}
@@ -747,7 +769,7 @@ func TestRunReconcile_RestartNoticeOnlyForLinkChanges(t *testing.T) {
 		base, repoRoot := reconcileFixture(t)
 		brokenRecordedLink(t, base, repoRoot, "Web/proj", "a")
 
-		code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
+		code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 		}
@@ -761,7 +783,7 @@ func TestRunReconcile_RestartNoticeOnlyForLinkChanges(t *testing.T) {
 		base, repoRoot := reconcileFixture(t)
 		brokenRecordedLink(t, base, repoRoot, "Web/proj", "a")
 
-		_, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag)...)
+		_, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag)...)
 		if strings.Contains(stdout, restartNotice) {
 			t.Errorf("a dry run told the user to restart their session:\n%s", stdout)
 		}
@@ -776,7 +798,7 @@ func TestRunReconcile_RestartNoticeOnlyForLinkChanges(t *testing.T) {
 			t.Fatalf("removing the link: %v", err)
 		}
 
-		code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--apply")...)
+		code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--apply")...)
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 		}
@@ -802,7 +824,7 @@ func TestRunInventory_NeverNarrowsToTheProjectYouAreIn(t *testing.T) {
 	mustMkdirT(t, filepath.Join(repoRoot, ".claude", "agents"))
 
 	t.Chdir(home)
-	code, stdout, stderr := runCLI(t, "inventory", "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "inventory")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 	}
@@ -821,12 +843,12 @@ func TestRunInventory_NeverNarrowsToTheProjectYouAreIn(t *testing.T) {
 			// narrow, so the assertion below is about the exemption and not
 			// about a walk that failed to find anything. Read off stderr,
 			// which is where --json puts the root line.
-			_, _, scanned := runCLI(t, "scan", "--repo", repoRoot, "--json")
+			_, _, scanned := runCLI(t, "scan", "--json")
 			if !strings.Contains(scanned, "current directory") {
 				t.Fatalf("scan did not narrow here, so the fixture proves nothing:\n%s", scanned)
 			}
 
-			code, stdout, stderr := runCLI(t, "inventory", "--repo", repoRoot, "--check")
+			code, stdout, stderr := runCLI(t, "inventory", "--check")
 			if code != exitOK {
 				t.Errorf("exit = %d, want %d: --check narrowed and called the machine-wide file stale\n%s\n%s",
 					code, exitOK, stdout, stderr)
@@ -861,7 +883,7 @@ func TestRunReconcile_RekeyDoesNotAskForARestart(t *testing.T) {
 	recordInState(t, repoRoot, "Web/new-name", "a", path, oldCapture)
 
 	move := "--" + reconcile.RekeyFlag + "=Web/old-name=Web/new-name"
-	code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, move, "--apply")...)
+	code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, move, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 	}
@@ -881,7 +903,7 @@ func TestRun_RootDerivationRefusalsReachTheExitCode(t *testing.T) {
 	// not fs.ErrNotExist, on every platform and as root, which chmod 000 is not.
 	// The enclosing .git makes a swallowed error climb to a project and exit 0.
 	t.Run("a marker that cannot be looked at", func(t *testing.T) {
-		home, repoRoot := projectScopeFixture(t)
+		home, _ := projectScopeFixture(t)
 		enclosing := filepath.Join(home, "Web", "outer")
 		mustMkdirT(t, filepath.Join(enclosing, ".git"))
 		dir := filepath.Join(enclosing, "loop")
@@ -898,7 +920,7 @@ func TestRun_RootDerivationRefusalsReachTheExitCode(t *testing.T) {
 		}
 
 		t.Chdir(dir)
-		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot)
+		code, stdout, stderr := runCLI(t, "scan")
 		if code != exitFailure {
 			t.Errorf("exit = %d, want %d: an unreadable marker must refuse, not climb to the enclosing project\n%s\n%s",
 				code, exitFailure, stdout, stderr)
@@ -912,7 +934,7 @@ func TestRun_RootDerivationRefusalsReachTheExitCode(t *testing.T) {
 	// cd into a directory, delete it, and os.Getwd may still hand back the path.
 	// Getwd failing and resolveDir failing on the stale path both say "could not".
 	t.Run("a working directory that was deleted underneath us", func(t *testing.T) {
-		home, repoRoot := projectScopeFixture(t)
+		home, _ := projectScopeFixture(t)
 		gone := filepath.Join(home, "Web", "gone", "sub")
 		mustMkdirT(t, gone)
 
@@ -921,7 +943,7 @@ func TestRun_RootDerivationRefusalsReachTheExitCode(t *testing.T) {
 			t.Fatalf("removing the working directory: %v", err)
 		}
 
-		code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot)
+		code, stdout, stderr := runCLI(t, "scan")
 		if code != exitFailure {
 			t.Errorf("exit = %d, want %d: a deleted working directory must refuse\n%s\n%s",
 				code, exitFailure, stdout, stderr)
@@ -942,7 +964,7 @@ func TestRunLink_AgentRefusalNamesTheRoot(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", "canonical\n")
 	t.Chdir(filepath.Join(home, "Web"))
 
-	code, _, stderr := runCLI(t, "link", "--repo", repoRoot, "--agent", "shared", "--apply", "--"+allFlag)
+	code, _, stderr := runCLI(t, "link", "--agent", "shared", "--apply", "--"+allFlag)
 	if code != exitFailure {
 		t.Fatalf("exit = %d, want %d", code, exitFailure)
 	}
@@ -954,7 +976,7 @@ func TestRunLink_AgentRefusalNamesTheRoot(t *testing.T) {
 
 	// And it stays quiet when the root is not the reason: a bad agent name is
 	// refused for its own reason and needs no advice about where to stand.
-	_, _, stderr = runCLI(t, "link", "--repo", repoRoot, "--project", "Web/alpha", "--agent", "../escape")
+	_, _, stderr = runCLI(t, "link", "--project", "Web/alpha", "--agent", "../escape")
 	if strings.Contains(stderr, "selects no project") {
 		t.Errorf("the root hint fired on an unrelated refusal:\n%s", stderr)
 	}

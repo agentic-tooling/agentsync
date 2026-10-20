@@ -31,7 +31,7 @@ const inventoryFileName = "inventory.json"
 // The home check is a warning rather than a refusal, as in scan and doctor: a
 // read-only command with a wrong $HOME produces a visibly wrong report, which
 // fails safe. RequireHome exists to stop a write landing in the wrong
-// namespace, and the only write here goes to a path the caller named.
+// namespace, and the only write here is this command's own derived file.
 //
 // It is also the one command that does not derive its root from the working
 // directory. That document describes the whole machine by definition, so
@@ -42,8 +42,7 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerWideRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerWideAll(fs)
 	out := fs.String("out", "", "write here instead of <repo>/"+inventoryFileName)
 	toStdout := fs.Bool("stdout", false, "write to stdout and leave the file alone")
 	check := fs.Bool("check", false,
@@ -59,6 +58,10 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 		// block to stderr.
 		return exitFailure
 	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "agentsync: %s\n", strayArg("inventory", fs.Arg(0), nil))
+		return exitFailure
+	}
 
 	// Refused rather than resolved by precedence. --stdout says "write the
 	// document here", --check says "write nothing and compare" — whichever
@@ -71,13 +74,13 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	repo, repoFrom, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo()
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
 	}
 
-	root, err := rootF.resolveWide(repo.Home)
+	root, err := resolveWide(*all)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure

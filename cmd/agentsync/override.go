@@ -65,8 +65,7 @@ func runOverride(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerAll(fs)
 	agent := fs.String("agent", "", "agent to override")
 	model := fs.String("model", "", "model the agent runs on in this project")
 	effort := fs.String("effort", "", "effort the agent runs at in this project")
@@ -81,18 +80,18 @@ func runOverride(args []string, stdout, stderr io.Writer) int {
 	}
 	set := override.Value{Model: *model, Effort: *effort}
 	err := overrideFlagsErr(fs, *agent, *clearName, set, *apply)
-	if err == nil && *rootF.all {
-		err = fmt.Errorf("override works on one project, so --%s is refused; pass --root PROJECT or run inside it", allFlag)
+	if err == nil && *all {
+		err = fmt.Errorf("override works on one project, so --%s is refused; run it inside the project", allFlag)
 	}
 	var repo *scan.Repo
 	var repoFrom string
 	var root rootChoice
 	var f *override.File
 	if err == nil {
-		repo, repoFrom, err = openRepo(*repoPath)
+		repo, repoFrom, err = openRepo()
 	}
 	if err == nil {
-		root, err = rootF.resolve(repo.Home)
+		root, err = resolveProject(repo.Home)
 	}
 	agentsDir := filepath.Join(root.Path, ".claude", "agents")
 	if err == nil {
@@ -144,7 +143,7 @@ func runOverride(args []string, stdout, stderr io.Writer) int {
 func overrideFlagsErr(fs *flag.FlagSet, agent, clear string, set override.Value, apply bool) error {
 	switch {
 	case fs.NArg() > 0:
-		return fmt.Errorf("override takes no arguments, got %q", fs.Arg(0))
+		return errors.New(strayArg("override", fs.Arg(0), nil))
 	case clear != "" && (agent != "" || set != override.Value{}):
 		return errors.New("--clear takes no --agent, --model or --effort")
 	case agent == "" && set != override.Value{}:

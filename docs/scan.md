@@ -30,4 +30,5 @@ An agent with an [override](override.md) in its project's
 medium` (`-` for a part the override leaves alone). A settings file that cannot
 be read is a warning on stderr. The JSON output does not include overrides.
 
-Root selection and `--all` are covered in [configuration](configuration.md).
+Run it from the project directory; `--all` scans the whole default tree instead.
+Root selection is covered in [configuration](configuration.md).

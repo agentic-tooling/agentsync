@@ -34,8 +34,10 @@ func inventoryFixture(t *testing.T) (base, repoRoot, root string) {
 	return base, repoRoot, root
 }
 
-func inventoryArgs(repoRoot, root string, extra ...string) []string {
-	return append([]string{"inventory", "--repo", repoRoot, "--root", root}, extra...)
+func inventoryArgs(t *testing.T, repoRoot, root string, extra ...string) []string {
+	t.Helper()
+	inTree(t, repoRoot, root)
+	return append([]string{"inventory"}, extra...)
 }
 
 func inventoryPath(repoRoot string) string {
@@ -44,11 +46,35 @@ func inventoryPath(repoRoot string) string {
 
 // --- writing ----------------------------------------------------------------
 
+// TestRunInventory_EmptyHomeWarnsAndCompletes: inventory needs no home to find
+// its tree, so an empty $HOME is a warning, as in scan, on the default path and
+// with --all.
+func TestRunInventory_EmptyHomeWarnsAndCompletes(t *testing.T) {
+	base, repoRoot, root := inventoryFixture(t)
+	mustWriteT(t, projectAgentPath(base, "Web/one", "solo"), "only here\n")
+
+	for _, extra := range [][]string{nil, {"--" + allFlag}} {
+		args := inventoryArgs(t, repoRoot, root, extra...)
+		t.Setenv("HOME", "")
+		mustRemoveAll(t, inventoryPath(repoRoot))
+		code, stdout, stderr := runCLI(t, args...)
+		if code != exitOK {
+			t.Errorf("%v: exit = %d, want %d\n%s", extra, code, exitOK, stderr)
+		}
+		if !strings.Contains(stderr, "warning:") || !strings.Contains(stderr, "$HOME") {
+			t.Errorf("%v: an empty $HOME produced no warning naming it:\n%s", extra, stderr)
+		}
+		if !strings.Contains(stdout, "Root: ") || !strings.Contains(readFileT(t, inventoryPath(repoRoot)), "solo") {
+			t.Errorf("%v: the run did not complete:\n%s", extra, stdout)
+		}
+	}
+}
+
 func TestRunInventory_WritesTheFileAndSummarizes(t *testing.T) {
 	base, repoRoot, root := inventoryFixture(t)
 	mustWriteT(t, projectAgentPath(base, "Web/one", "solo"), "only here\n")
 
-	code, stdout, stderr := runCLI(t, inventoryArgs(repoRoot, root)...)
+	code, stdout, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -74,12 +100,12 @@ func TestRunInventory_RegeneratingAnUnchangedTreeChangesNothing(t *testing.T) {
 	mustWriteT(t, projectAgentPath(base, "Web/one", "solo"), "only here\n")
 	mustWriteT(t, filepath.Join(base, ".claude", "agents", "global.md"), "global\n")
 
-	if code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root)...); code != exitOK {
+	if code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...); code != exitOK {
 		t.Fatalf("first run exit = %d: %s", code, stderr)
 	}
 	first := readFileT(t, inventoryPath(repoRoot))
 
-	if code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root)...); code != exitOK {
+	if code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...); code != exitOK {
 		t.Fatalf("second run exit = %d: %s", code, stderr)
 	}
 	if second := readFileT(t, inventoryPath(repoRoot)); second != first {
@@ -93,7 +119,7 @@ func TestRunInventory_RegeneratingAnUnchangedTreeChangesNothing(t *testing.T) {
 func TestRunInventory_StdoutLeavesTheFileAlone(t *testing.T) {
 	_, repoRoot, root := inventoryFixture(t)
 
-	code, stdout, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--stdout")...)
+	code, stdout, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--stdout")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d: %s", code, exitOK, stderr)
 	}
@@ -111,7 +137,7 @@ func TestRunInventory_OutRedirectsTheWrite(t *testing.T) {
 	_, repoRoot, root := inventoryFixture(t)
 	dest := filepath.Join(t.TempDir(), "nested", "elsewhere.json")
 
-	code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--out", dest)...)
+	code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--out", dest)...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d: %s", code, exitOK, stderr)
 	}
@@ -135,7 +161,7 @@ func TestRunInventory_NeverTouchesAProject(t *testing.T) {
 		t.Fatalf("lstat: %v", err)
 	}
 
-	if code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root)...); code != exitOK {
+	if code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...); code != exitOK {
 		t.Fatalf("exit = %d: %s", code, stderr)
 	}
 
@@ -161,11 +187,11 @@ func TestRunInventory_NeverTouchesAProject(t *testing.T) {
 func TestRunInventory_Check(t *testing.T) {
 	t.Run("a current file exits 0", func(t *testing.T) {
 		_, repoRoot, root := inventoryFixture(t)
-		if code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root)...); code != exitOK {
+		if code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...); code != exitOK {
 			t.Fatalf("write exit = %d: %s", code, stderr)
 		}
 
-		code, stdout, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--check")...)
+		code, stdout, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--check")...)
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s",
 				code, exitOK, stdout, stderr)
@@ -177,7 +203,7 @@ func TestRunInventory_Check(t *testing.T) {
 
 	t.Run("a stale file exits 1 and is left alone", func(t *testing.T) {
 		base, repoRoot, root := inventoryFixture(t)
-		if code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root)...); code != exitOK {
+		if code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...); code != exitOK {
 			t.Fatalf("write exit = %d: %s", code, stderr)
 		}
 		// A real change in the tree, not a hand-edit of the file: this is the
@@ -186,7 +212,7 @@ func TestRunInventory_Check(t *testing.T) {
 		mustWriteT(t, projectAgentPath(base, "Web/new", "appeared"), "new agent\n")
 		before := readFileT(t, inventoryPath(repoRoot))
 
-		code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--check")...)
+		code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--check")...)
 		if code != exitAtRisk {
 			t.Fatalf("exit = %d, want %d: %s", code, exitAtRisk, stderr)
 		}
@@ -203,7 +229,7 @@ func TestRunInventory_Check(t *testing.T) {
 	t.Run("an absent file exits 1 and says how to create it", func(t *testing.T) {
 		_, repoRoot, root := inventoryFixture(t)
 
-		code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--check")...)
+		code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--check")...)
 		if code != exitAtRisk {
 			t.Fatalf("exit = %d, want %d: %s", code, exitAtRisk, stderr)
 		}
@@ -220,7 +246,7 @@ func TestRunInventory_Check(t *testing.T) {
 		dest := filepath.Join(t.TempDir(), "in-the-way")
 		mustMkdirT(t, dest)
 
-		code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--check", "--out", dest)...)
+		code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--check", "--out", dest)...)
 		// 2, not 1: the tool could not tell whether the file is current, which
 		// is a different answer from knowing it is stale, and CI must be able
 		// to distinguish "regenerate this" from "something is wrong here".
@@ -235,7 +261,7 @@ func TestRunInventory_Check(t *testing.T) {
 		// Refused rather than resolved by precedence: silently ignoring
 		// --check would make `--check --stdout` exit 0 on every run and read
 		// as a passing freshness gate while checking nothing.
-		code, stdout, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--check", "--stdout")...)
+		code, stdout, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--check", "--stdout")...)
 		if code != exitFailure {
 			t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s",
 				code, exitFailure, stdout, stderr)
@@ -266,14 +292,14 @@ func TestRunInventory_IsWiredIntoTheCLI(t *testing.T) {
 	}
 
 	_, repoRoot, root := inventoryFixture(t)
-	if code, _, stderr := runCLI(t, inventoryArgs(repoRoot, root, "--stdout")...); code != exitOK {
+	if code, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root, "--stdout")...); code != exitOK {
 		t.Errorf("the subcommand is not reachable: exit %d: %s", code, stderr)
 	}
 }
 
 func TestRunInventory_UnknownFlagExitsTwo(t *testing.T) {
 	_, repoRoot, root := inventoryFixture(t)
-	code, _, _ := runCLI(t, inventoryArgs(repoRoot, root, "--nope")...)
+	code, _, _ := runCLI(t, inventoryArgs(t, repoRoot, root, "--nope")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d", code, exitFailure)
 	}
@@ -291,7 +317,7 @@ func TestRunInventory_WarnsWhenTheInstallRegistryIsMissing(t *testing.T) {
 		"market", "plug", "1.0.0", "agents", "a.md"), "plugin agent\n")
 
 	for _, mode := range []string{"", "--stdout"} {
-		args := inventoryArgs(repoRoot, root)
+		args := inventoryArgs(t, repoRoot, root)
 		if mode != "" {
 			args = append(args, mode)
 		}
@@ -312,7 +338,7 @@ func TestRunInventory_WarnsWhenTheInstallRegistryIsMissing(t *testing.T) {
 func TestRunInventory_DoesNotWarnWithNoPluginTree(t *testing.T) {
 	_, repoRoot, root := inventoryFixture(t)
 
-	_, _, stderr := runCLI(t, inventoryArgs(repoRoot, root)...)
+	_, _, stderr := runCLI(t, inventoryArgs(t, repoRoot, root)...)
 	if strings.Contains(stderr, "no plugin install registry") {
 		t.Errorf("warned with no plugin tree at all:\n%s", stderr)
 	}

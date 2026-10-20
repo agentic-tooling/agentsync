@@ -329,7 +329,7 @@ type capture struct {
 // live counterpart, and a whole capture directory whose project is gone.
 //
 // Liveness is asked of the filesystem rather than of the scan's entries. The
-// scan only saw what was under its --root, so a capture belonging to a project
+// scan only saw what was under its root, so a capture belonging to a project
 // outside that root would look stale on every run — a false report about the
 // one thing doctor must never be casually wrong about, since the suggested
 // remedy a reader will imagine is deletion.

@@ -2,7 +2,8 @@
 
 `agentsync doctor` reports drift the other commands do not. It writes nothing:
 no `--apply`, no state file, no exclude line. It takes only the common flags
-(see [configuration](configuration.md)).
+(see [configuration](configuration.md)). Run it from the project directory;
+`--all` checks the whole default tree instead.
 
 ```bash
 agentsync doctor

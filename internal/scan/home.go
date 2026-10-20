@@ -30,8 +30,8 @@ const AllowOutsideHomeFlag = "allow-outside-home"
 // statement about the projects, never about the root they were reached
 // through. Judging the root instead looks equivalent and is not — scanning /
 // or /Users puts home *under* the root, which says nothing about where the
-// projects are, and is exactly the shape `sudo -i agentsync scan --root /`
-// takes.
+// projects are, and is exactly the shape `sudo -i agentsync scan --all` with
+// a default tree of / takes.
 type HomeStatus int
 
 const (

@@ -21,8 +21,9 @@ That limit is the backstop if anything here undercounts.
 ## What it reads and sends
 
 The agents are the ones [scan](scan.md) finds under the root (the project's
-`.claude/agents/`, linked or local); root and repo resolve as for every other
-command (see [configuration](configuration.md)). An agent file linked into
+`.claude/agents/`, linked or local); run it from the project directory, or pass
+`--all` for the whole default tree. The repo resolves as for every other command
+(see [configuration](configuration.md)). An agent file linked into
 several projects is asked about once. A `.md` file without `name` and
 `description` frontmatter is not an agent and is skipped.
 

@@ -21,35 +21,36 @@ absolute path. That holds on macOS too.
 with `~/`; `~` expands against `$HOME`. A missing file
 is not an error, but a symlink there whose target is missing is a broken file.
 
-## Flags and environment
+## Environment
 
-| Setting | Flag | Environment | Config key | Used for |
-|---|---|---|---|---|
-| Canonical agents repo | `--repo PATH` | `$AGENTSYNC_REPO` | `repo` | every command |
-| Default tree of projects | `--root PATH` | `$AGENTSYNC_ROOT` | `root` | `--all` and `inventory` |
+| Setting | Environment | Config key | Used for |
+|---|---|---|---|
+| Canonical agents repo | `$AGENTSYNC_REPO` | `repo` | every command |
+| Default tree of projects | `$AGENTSYNC_ROOT` | `root` | `--all` and `inventory` |
 
 ```bash
 export AGENTSYNC_REPO="$HOME/src/my-agents"
 export AGENTSYNC_ROOT="$HOME/src"
 ```
 
-`$AGENTSYNC_ROOT` must be an absolute path.
+Both variables must be absolute paths; a relative one refuses with exit 2.
+There is no flag for either: the project is the directory you run in, and only
+[`init`](init.md) takes `--repo` and `--root`, as the values it writes.
 
 ## Precedence
 
 Each setting is resolved on its own, so the repo can come from the environment
-and the root from the file. An empty or blank flag or variable counts as unset.
+and the root from the file. An empty or blank variable counts as unset.
 
 | Order | Source |
 |---|---|
-| 1 | flag |
-| 2 | environment variable |
-| 3 | config file |
-| 4 | refuse with exit 2 |
+| 1 | environment variable |
+| 2 | config file |
+| 3 | refuse with exit 2 |
 
-The file is read only when a setting is still unset after the flag and the
-environment. A broken file therefore never blocks a run that passes both, which
-is how you work around it while fixing it.
+The file is read only when a setting is still unset after the environment. A
+broken file therefore never blocks a run that sets both variables, which is how
+you work around it while fixing it.
 
 Every run that reports prints a `Repo:` line and a `Root:` line naming where
 each value came from, including the config file's path.
@@ -80,8 +81,9 @@ path>`.
 
 ## Which tree gets scanned
 
-Without `--root`, every command except `inventory` derives its root from the
-working directory. It walks up, stopping before `$HOME`, and takes the first
+Every command except `inventory` and `init` works on the project the working
+directory is in; to work on a different project, run the command from inside
+it. It walks up, stopping before `$HOME`, and takes the first
 directory holding `.claude/agents/`, else `.claude/`, else `.git/`. All three
 are tried at each level before ascending, so a `.claude/` inside a git
 repository resolves to that subdirectory, not the repository root. A project
@@ -91,14 +93,17 @@ provision its first agent.
 If nothing is found before `$HOME`, the run is refused with exit 2 and nothing
 is scanned: a new project with no markers yet would otherwise widen to every
 project on the machine. Run inside a project, create its `.claude/agents/`, or
-pass `--all` or `--root PATH`. A working directory that cannot be determined or
+pass `--all`. A working directory that cannot be determined or
 resolved, or an ancestor that cannot be read, also refuses with exit 2 rather
 than widening to the whole tree.
 
-- `--root PATH` names a tree explicitly and switches the derivation off.
-- `--all` scans the default tree (`$AGENTSYNC_ROOT` or `root` in the config
-  file), the machine-wide view. It is refused together with `--root`, not
-  resolved by precedence.
+`--all` scans the default tree (`$AGENTSYNC_ROOT` or `root` in the config file)
+instead, the machine-wide view.
+
+`scan`, `import`, `link`, `doctor`, `reconcile`, `inventory`, `optimize` and
+`override` refuse a positional argument with exit 2. One that looks like a path
+(it starts with `/`, `~` or `.`, or names an existing directory) adds "Run it
+from the project directory instead."
 
 A derived root also selects that project for `link`, as `--project <key>`
 would. That is what makes `agentsync link --agent NAME --apply` a complete
@@ -114,7 +119,7 @@ stays machine-readable. A run refused before it reports prints nothing to stdout
 
 `inventory` never derives a root from the working directory. It describes every
 agent on the machine, so a project-scoped run would overwrite the machine-wide
-document under the same name. It uses `--root`, else the default tree; `--all` is
+document under the same name. It always uses the default tree; `--all` is
 accepted and means what the default already means. See [inventory](inventory.md).
 
 ## The home guard
@@ -136,8 +141,6 @@ If your projects genuinely live outside `$HOME`, pass `--allow-outside-home`.
 
 | Flag | Meaning |
 |---|---|
-| `--repo PATH` | canonical agents repo |
-| `--root PATH` | tree to scan |
 | `--all` | scan the default tree |
 | `--json` | machine-readable output |
 | `--allow-outside-home` | see above |

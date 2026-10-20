@@ -31,8 +31,10 @@ func doctorFixture(t *testing.T) (base, repoRoot string) {
 	return base, repoRoot
 }
 
-func doctorArgs(repoRoot, root string, extra ...string) []string {
-	return append([]string{"doctor", "--repo", repoRoot, "--root", root}, extra...)
+func doctorArgs(t *testing.T, repoRoot, root string, extra ...string) []string {
+	t.Helper()
+	inTree(t, repoRoot, root)
+	return append([]string{"doctor", "--" + allFlag}, extra...)
 }
 
 // capturePath is where an import would have written a project's copy.
@@ -67,7 +69,7 @@ func TestRunDoctor_BrokenLinkExitsOneAndIsLeftInPlace(t *testing.T) {
 	missing := filepath.Join(repoRoot, "agents", "renamed-away.md")
 	link := linkAt(t, projectAgentPath(base, "proj", "renamed-away"), missing)
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -98,7 +100,7 @@ func TestRunDoctor_ForeignLinkAloneStillExitsZero(t *testing.T) {
 	mustWriteT(t, elsewhere, "not ours\n")
 	linkAt(t, projectAgentPath(base, "proj", "theirs"), elsewhere)
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d: a foreign link is not a fault\nstdout:\n%s\nstderr:\n%s",
 			code, exitOK, stdout, stderr)
@@ -120,7 +122,7 @@ func TestRunDoctor_CleanSummaryDoesNotClaimLinkWouldRunClean(t *testing.T) {
 	target := globalAgent(t, repoRoot, "shared", "canonical\n")
 	linkAt(t, projectAgentPath(base, "proj", "shared"), target)
 
-	code, stdout, _ := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, _ := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\n%s", code, exitOK, stdout)
 	}
@@ -142,7 +144,7 @@ func TestRunDoctor_CleanTreeExitsZeroWithAnEmptyReport(t *testing.T) {
 	target := globalAgent(t, repoRoot, "shared", "canonical\n")
 	linkAt(t, projectAgentPath(base, "proj", "shared"), target)
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -150,7 +152,7 @@ func TestRunDoctor_CleanTreeExitsZeroWithAnEmptyReport(t *testing.T) {
 		t.Errorf("the report does not say the tree is clean:\n%s", stdout)
 	}
 
-	_, jsonOut, _ := runCLI(t, doctorArgs(repoRoot, base, "--json")...)
+	_, jsonOut, _ := runCLI(t, doctorArgs(t, repoRoot, base, "--json")...)
 	rep := doctorJSON(t, jsonOut)
 	if len(rep.Findings) != 0 {
 		t.Errorf("Findings = %v, want []", rep.Findings)
@@ -170,7 +172,7 @@ func TestRunDoctor_StaleCaptureExitsOneAndTheCaptureSurvives(t *testing.T) {
 	kept := capturePath(repoRoot, "Web/example", "golang-developer")
 	mustWriteT(t, kept, "a 44-line predecessor\n")
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -207,7 +209,7 @@ func TestRunDoctor_OrphanedCaptureDirIsReportedAsOneDirectory(t *testing.T) {
 	mustWriteT(t, projectAgentPath(base, "Web/living", "kept"), alive)
 	mustWriteT(t, capturePath(repoRoot, "Web/living", "kept"), alive)
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -221,7 +223,7 @@ func TestRunDoctor_OrphanedCaptureDirIsReportedAsOneDirectory(t *testing.T) {
 		t.Errorf("one gone project among live ones must not be blamed on $HOME:\n%s", stderr)
 	}
 
-	_, jsonOut, _ := runCLI(t, doctorArgs(repoRoot, base, "--json")...)
+	_, jsonOut, _ := runCLI(t, doctorArgs(t, repoRoot, base, "--json")...)
 	rep := doctorJSON(t, jsonOut)
 	if len(rep.Findings) != 1 {
 		t.Fatalf("Findings = %v, want exactly one", rep.Findings)
@@ -254,7 +256,7 @@ func TestRunDoctor_MismatchCarriesTheRemedyCommand(t *testing.T) {
 	mustWriteT(t, want, "this project's customized one\n")
 	linkAt(t, projectAgentPath(base, "proj", "web-researcher"), global)
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -274,7 +276,7 @@ func TestRunDoctor_ReadmeIsNeverACapture(t *testing.T) {
 	base, repoRoot := doctorFixture(t)
 	mustWriteT(t, filepath.Join(repoRoot, "project-agents", "README.md"), "# project-agents\n")
 
-	code, stdout, _ := runCLI(t, doctorArgs(repoRoot, base, "--json")...)
+	code, stdout, _ := runCLI(t, doctorArgs(t, repoRoot, base, "--json")...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\n%s", code, exitOK, stdout)
 	}
@@ -304,7 +306,7 @@ func TestRunDoctor_UnreadableSubtreeIsNotACleanRun(t *testing.T) {
 	unreadable, inside := testfs.UnreadableSubtree(t, locked)
 	testfs.PlantAgentsDir(t, inside, "proj")
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -339,7 +341,7 @@ func TestRunDoctor_ImplausibleHomeWarnsRatherThanFails(t *testing.T) {
 	// live under — the shape `sudo -i` produces.
 	t.Setenv("HOME", t.TempDir())
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	if code == exitFailure {
 		t.Errorf("exit = %d: a read-only command must not refuse over $HOME\nstdout:\n%s\nstderr:\n%s",
 			code, stdout, stderr)
@@ -351,7 +353,7 @@ func TestRunDoctor_ImplausibleHomeWarnsRatherThanFails(t *testing.T) {
 		t.Errorf("the warning does not name the opt-out flag:\n%s", stderr)
 	}
 
-	_, _, quiet := runCLI(t, doctorArgs(repoRoot, base, "--allow-outside-home")...)
+	_, _, quiet := runCLI(t, doctorArgs(t, repoRoot, base, "--allow-outside-home")...)
 	if strings.Contains(quiet, "warning:") {
 		t.Errorf("--allow-outside-home did not suppress the warning:\n%s", quiet)
 	}
@@ -377,7 +379,7 @@ func TestRunDoctor_CapturesWarnAboutHomeEvenWhenNoProjectWasScanned(t *testing.T
 	t.Setenv("HOME", t.TempDir())
 	emptyRoot := t.TempDir()
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, emptyRoot)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, emptyRoot)...)
 
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s", code, exitAtRisk, stdout)
@@ -404,7 +406,7 @@ func TestRunDoctor_CapturesWarnAboutHomeEvenWhenNoProjectWasScanned(t *testing.T
 	// --allow-outside-home must not silence it: that flag claims the projects
 	// live outside $HOME, and such projects key under _outside-home/<abs path>
 	// and resolve to real directories, so it says nothing about this evidence.
-	_, _, stillLoud := runCLI(t, doctorArgs(repoRoot, emptyRoot, "--allow-outside-home")...)
+	_, _, stillLoud := runCLI(t, doctorArgs(t, repoRoot, emptyRoot, "--allow-outside-home")...)
 	if !strings.Contains(stillLoud, "warning:") {
 		t.Errorf("--allow-outside-home silenced a warning it makes no claim about:\n%s", stillLoud)
 	}
@@ -424,7 +426,7 @@ func TestRunDoctor_OutsideHomeOrphanDoesNotBlameTheHome(t *testing.T) {
 	const key = "_outside-home/nonexistent-volume-for-tests/gone"
 	mustWriteT(t, capturePath(repoRoot, key, "agent"), "the only copy\n")
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 
 	// The orphan itself is real and still reported.
 	if code != exitAtRisk {
@@ -442,7 +444,7 @@ func TestRunDoctor_OutsideHomeOrphanDoesNotBlameTheHome(t *testing.T) {
 		t.Errorf("the summary caveats a finding the home took no part in:\n%s", stdout)
 	}
 
-	_, jsonOut, _ := runCLI(t, doctorArgs(repoRoot, base, "--json")...)
+	_, jsonOut, _ := runCLI(t, doctorArgs(t, repoRoot, base, "--json")...)
 	rep := doctorJSON(t, jsonOut)
 	if rep.Home.Suspect {
 		t.Errorf("home.suspect = true for a key the home never resolved:\n%s", jsonOut)
@@ -464,7 +466,7 @@ func TestRunDoctor_JSONCarriesTheHomeSignal(t *testing.T) {
 	mustWriteT(t, capturePath(repoRoot, "Web/one", "agent"), "the only copy\n")
 
 	t.Setenv("HOME", t.TempDir())
-	_, stdout, _ := runCLI(t, doctorArgs(repoRoot, t.TempDir(), "--json")...)
+	_, stdout, _ := runCLI(t, doctorArgs(t, repoRoot, t.TempDir(), "--json")...)
 
 	rep := doctorJSON(t, stdout)
 	if !rep.Home.Suspect {
@@ -481,7 +483,7 @@ func TestRunDoctor_JSONCarriesTheHomeSignal(t *testing.T) {
 	// rather than decoration.
 	t.Setenv("HOME", base)
 	mustMkdirT(t, filepath.Join(base, "Web", "one"))
-	_, clean, _ := runCLI(t, doctorArgs(repoRoot, base, "--json")...)
+	_, clean, _ := runCLI(t, doctorArgs(t, repoRoot, base, "--json")...)
 	if got := doctorJSON(t, clean); got.Home.Suspect || got.Home.Warning != "" {
 		t.Errorf("home signal fired on a run with a correct home: %+v", got.Home)
 	}
@@ -513,7 +515,7 @@ func TestRunDoctor_WritesNothingAnywhere(t *testing.T) {
 
 	// base holds the repo too, so one snapshot covers both sides.
 	before := treeSnapshot(t, base)
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base)...)
 	after := treeSnapshot(t, base)
 
 	if code != exitAtRisk {
@@ -524,7 +526,7 @@ func TestRunDoctor_WritesNothingAnywhere(t *testing.T) {
 
 	// And again in JSON, which walks the same code with a different emitter.
 	before = treeSnapshot(t, base)
-	runCLI(t, doctorArgs(repoRoot, base, "--json")...)
+	runCLI(t, doctorArgs(t, repoRoot, base, "--json")...)
 	assertUnchanged(t, before, treeSnapshot(t, base))
 }
 
@@ -599,7 +601,7 @@ func TestRunDoctor_JSONCarriesFindingsAndExamined(t *testing.T) {
 	mustMkdirT(t, filepath.Join(base, "kept"))
 	mustWriteT(t, capturePath(repoRoot, "kept", "stale-one"), "x\n")
 
-	code, stdout, stderr := runCLI(t, doctorArgs(repoRoot, base, "--json")...)
+	code, stdout, stderr := runCLI(t, doctorArgs(t, repoRoot, base, "--json")...)
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\nstderr:\n%s", code, exitAtRisk, stderr)
 	}

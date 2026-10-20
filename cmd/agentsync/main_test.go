@@ -478,9 +478,7 @@ func TestRunScan_BadFlagReportsOnce(t *testing.T) {
 }
 
 func TestRunScan_MissingRepoFails(t *testing.T) {
-	code, _, stderr := runCLI(t, "scan",
-		"--repo", filepath.Join(t.TempDir(), "no-such-repo"),
-		"--root", t.TempDir())
+	code, _, stderr := runCLI(t, scanArgs(t, filepath.Join(t.TempDir(), "no-such-repo"), t.TempDir())...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d", code, exitFailure)
 	}
@@ -513,7 +511,7 @@ func TestRunScan_EndToEnd_AtRiskConsistency(t *testing.T) {
 	// loose: a file in no repository at all.
 	mustWriteT(t, filepath.Join(base, "loose", ".claude", "agents", "orphan.md"), "nowhere else\n")
 
-	commonArgs := []string{"scan", "--repo", repoRoot, "--root", base}
+	commonArgs := scanArgs(t, repoRoot, base)
 
 	codeText, stdoutText, _ := runCLI(t, append(append([]string{}, commonArgs...), "--at-risk")...)
 	codeJSON, stdoutJSON, _ := runCLI(t, append(append([]string{}, commonArgs...), "--at-risk", "--json")...)
@@ -580,7 +578,7 @@ func TestRunScan_EndToEnd_ProblemDoesNotHideRisk(t *testing.T) {
 	// A later project holding the file we must not miss.
 	mustWriteT(t, filepath.Join(base, "zzz", ".claude", "agents", "precious.md"), "unique\n")
 
-	code, stdout, stderr := runCLI(t, "scan", "--repo", repoRoot, "--root", base, "--fail-on-risk")
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, base, "--fail-on-risk")...)
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d (an unprotected file exists)\nstdout:\n%s\nstderr:\n%s",
 			code, exitAtRisk, stdout, stderr)
@@ -591,6 +589,29 @@ func TestRunScan_EndToEnd_ProblemDoesNotHideRisk(t *testing.T) {
 	if !strings.Contains(stdout, "adirectory.md") {
 		t.Errorf("the unclassifiable entry was not surfaced as a problem:\n%s", stdout)
 	}
+}
+
+// useRepo names the repo the way a user's environment does, and points the
+// config lookup at an empty directory so the author's real file is never read.
+func useRepo(t *testing.T, repoRoot string) {
+	t.Helper()
+	t.Setenv(envRepo, repoRoot)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
+
+// inProject names the repo and makes dir the working directory, which is how
+// a run names its project.
+func inProject(t *testing.T, repoRoot, dir string) {
+	t.Helper()
+	useRepo(t, repoRoot)
+	t.Chdir(dir)
+}
+
+// inTree makes root the default tree, for a run that passes --all.
+func inTree(t *testing.T, repoRoot, root string) {
+	t.Helper()
+	useRepo(t, repoRoot)
+	t.Setenv(envRoot, root)
 }
 
 // --- local fs helpers (the scan package's own are unexported) --------------

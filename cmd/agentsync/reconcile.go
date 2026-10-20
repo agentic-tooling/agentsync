@@ -108,8 +108,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerAll(fs)
 	apply := fs.Bool("apply", false, "make the changes; without it this is a dry run")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	allowOutsideHome := fs.Bool(scan.AllowOutsideHomeFlag, false,
@@ -148,8 +147,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 	if rest := fs.Args(); len(rest) > 0 {
-		fmt.Fprintf(stderr, "agentsync: unexpected argument %q; reconcile takes flags only.%s\n",
-			rest[0], dropCaptureHint(rest[0]))
+		fmt.Fprintf(stderr, "agentsync: %s\n", strayArg("reconcile", rest[0], dropCaptureHint))
 		return exitFailure
 	}
 
@@ -165,7 +163,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	repo, repoFrom, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo()
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
@@ -179,7 +177,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	root, err := rootF.resolve(repo.Home)
+	root, err := resolveRoot(repo.Home, *all)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
@@ -205,9 +203,9 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 	//
 	// plan.Dirs is what the scan walked, which is NOT everything the plan is
 	// about: judgeRecords works from absolute paths in the state document, and
-	// those need not fall under --root at all. So the guard covers the passes
-	// keyed by $HOME — adopt and re-key — and does not cover a decline or a
-	// prune for a project the scan never saw. That is the right split anyway:
+	// those need not fall under the scan root at all. So the guard covers the
+	// passes keyed by $HOME — adopt and re-key — and does not cover a decline or
+	// a prune for a project the scan never saw. That is the right split anyway:
 	// a record's path was resolved when it was written and does not depend on
 	// today's home, so a wrong home cannot misdirect it.
 	if *apply {

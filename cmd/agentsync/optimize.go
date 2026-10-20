@@ -41,8 +41,7 @@ func runOptimize(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerAll(fs)
 	asJSON := fs.Bool("json", false, "emit JSON")
 	advisor := fs.String("advisor", defaultAdvisor, "OpenRouter decision model to ask")
 	maxCost := fs.Float64("max-cost", 0.50, "most this run may spend, in USD")
@@ -67,12 +66,12 @@ func runOptimize(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	repo, repoFrom, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo()
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
 	}
-	root, err := rootF.resolve(repo.Home)
+	root, err := resolveRoot(repo.Home, *all)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
@@ -299,7 +298,7 @@ func resolved(p string) string {
 func optimizeFlagsErr(fs *flag.FlagSet, advisor string, maxCost, minConf float64) error {
 	switch {
 	case fs.NArg() > 0:
-		return fmt.Errorf("optimize takes no arguments, got %q", fs.Arg(0))
+		return errors.New(strayArg("optimize", fs.Arg(0), nil))
 	case strings.TrimSpace(advisor) == "":
 		return errors.New("--advisor is empty")
 	case !(maxCost >= 0) || math.IsInf(maxCost, 1):

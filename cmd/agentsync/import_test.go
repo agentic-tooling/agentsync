@@ -32,8 +32,10 @@ func importFixture(t *testing.T) (base, repoRoot string) {
 	return base, repoRoot
 }
 
-func importArgs(repoRoot, root string, extra ...string) []string {
-	return append([]string{"import", "--repo", repoRoot, "--root", root}, extra...)
+func importArgs(t *testing.T, repoRoot, root string, extra ...string) []string {
+	t.Helper()
+	inTree(t, repoRoot, root)
+	return append([]string{"import", "--" + allFlag}, extra...)
 }
 
 // commitRepo makes the fixture's agent repo a git repository and commits
@@ -122,7 +124,7 @@ func TestRunImport_DryRunIsTheDefault(t *testing.T) {
 	base, repoRoot := importFixture(t)
 	projectAgent(t, base, "proj", "orphan", "only here\n")
 
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -151,7 +153,7 @@ func TestRunImport_ApplyCapturesAndIsIdempotent(t *testing.T) {
 	projectAgent(t, base, "proj", "orphan", "only here\n")
 	projectAgent(t, base, "nested/deeper", "other", "also only here\n")
 
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -166,7 +168,7 @@ func TestRunImport_ApplyCapturesAndIsIdempotent(t *testing.T) {
 
 	// Second run: the captures are now byte-identical counterparts, so the
 	// scan calls them adoptable and there is nothing left to do.
-	code, stdout, stderr = runCLI(t, importArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr = runCLI(t, importArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("second run exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -190,7 +192,7 @@ func TestRunImport_ConflictIsRefusedAndExitsNonZero(t *testing.T) {
 	mustWriteT(t, dest, "an older capture nobody else has\n")
 
 	for _, extra := range [][]string{{}, {"--apply"}} {
-		code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, extra...)...)
+		code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, extra...)...)
 		if code != exitConflict {
 			t.Errorf("%v: exit = %d, want %d\nstdout:\n%s\nstderr:\n%s",
 				extra, code, exitConflict, stdout, stderr)
@@ -209,7 +211,7 @@ func TestRunImport_ConflictIsRefusedAndExitsNonZero(t *testing.T) {
 	// The opt-in, and only the opt-in, replaces it — and only once the
 	// capture it is about to destroy exists somewhere other than that path.
 	commitRepo(t, repoRoot)
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--apply", "--update")...)
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply", "--update")...)
 	if code != exitOK {
 		t.Fatalf("--update exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -230,7 +232,7 @@ func TestRunImport_UpdateRefusesAnUncommittedCapture(t *testing.T) {
 	dest := backupPath(t, repoRoot, "proj", "researcher")
 	mustWriteT(t, dest, "an older capture nobody has committed\n")
 
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--apply", "--update")...)
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply", "--update")...)
 	if code != exitConflict {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitConflict, stdout, stderr)
 	}
@@ -247,7 +249,7 @@ func TestRunImport_UpdateRefusesAnUncommittedCapture(t *testing.T) {
 
 	// The remedy works.
 	commitRepo(t, repoRoot)
-	code, stdout, stderr = runCLI(t, importArgs(repoRoot, base, "--apply", "--update")...)
+	code, stdout, stderr = runCLI(t, importArgs(t, repoRoot, base, "--apply", "--update")...)
 	if code != exitOK {
 		t.Fatalf("after committing, exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -270,7 +272,7 @@ func TestRunImport_SecondUpdateDoesNotDestroyTheFirst(t *testing.T) {
 	mustWriteT(t, dest, "v1\n")
 	commitRepo(t, repoRoot)
 
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--apply", "--update")...)
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply", "--update")...)
 	if code != exitOK {
 		t.Fatalf("first update exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -281,7 +283,7 @@ func TestRunImport_SecondUpdateDoesNotDestroyTheFirst(t *testing.T) {
 	// The project moves on; nobody committed the capture of v2.
 	mustWriteT(t, src, "v3\n")
 
-	code, stdout, stderr = runCLI(t, importArgs(repoRoot, base, "--apply", "--update")...)
+	code, stdout, stderr = runCLI(t, importArgs(t, repoRoot, base, "--apply", "--update")...)
 	if code != exitConflict {
 		t.Errorf("second update exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitConflict, stdout, stderr)
 	}
@@ -303,7 +305,7 @@ func TestRunImport_UpdateSelectsOneCapture(t *testing.T) {
 	mustWriteT(t, other, "other old capture\n")
 	commitRepo(t, repoRoot)
 
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base,
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base,
 		"--apply", "--update=chosen/researcher")...)
 	// The unselected one is still a conflict, so the run still exits 1.
 	if code != exitConflict {
@@ -328,7 +330,7 @@ func TestRunImport_UpdateSelectorSyntax(t *testing.T) {
 		mustWriteT(t, dest, "old capture\n")
 		commitRepo(t, repoRoot)
 
-		code, stdout, stderr := runCLI(t, importArgs(repoRoot, base,
+		code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base,
 			"--apply", "--update", "proj/researcher")...)
 		if code != exitFailure {
 			t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitFailure, stdout, stderr)
@@ -346,7 +348,7 @@ func TestRunImport_UpdateSelectorSyntax(t *testing.T) {
 		projectAgent(t, base, "proj", "researcher", "current\n")
 
 		for _, arg := range []string{"--update=researcher", "--update="} {
-			code, _, stderr := runCLI(t, importArgs(repoRoot, base, arg)...)
+			code, _, stderr := runCLI(t, importArgs(t, repoRoot, base, arg)...)
 			if code != exitFailure {
 				t.Errorf("%s: exit = %d, want %d\nstderr:\n%s", arg, code, exitFailure, stderr)
 			}
@@ -374,7 +376,7 @@ func TestRunImport_UpdateSelectorSyntax(t *testing.T) {
 		projectAgent(t, base, "proj", "researcher", "current\n")
 
 		for _, arg := range []string{"--", ""} {
-			code, _, stderr := runCLI(t, importArgs(repoRoot, base, "--", arg)...)
+			code, _, stderr := runCLI(t, importArgs(t, repoRoot, base, "--", arg)...)
 			if code != exitFailure {
 				t.Errorf("%q: exit = %d, want %d\nstderr:\n%s", arg, code, exitFailure, stderr)
 			}
@@ -395,7 +397,7 @@ func TestRunImport_UpdateSelectorSyntax(t *testing.T) {
 		mustWriteT(t, dest, "old capture\n")
 		commitRepo(t, repoRoot)
 
-		code, stdout, _ := runCLI(t, importArgs(repoRoot, base,
+		code, stdout, _ := runCLI(t, importArgs(t, repoRoot, base,
 			"--apply", "--update", "--update=false")...)
 		if code != exitConflict {
 			t.Errorf("exit = %d, want %d (the capture is still a conflict)\n%s", code, exitConflict, stdout)
@@ -410,7 +412,7 @@ func TestRunImport_UpdateSelectorSyntax(t *testing.T) {
 		projectAgent(t, base, "proj", "researcher", "only here\n")
 		commitRepo(t, repoRoot)
 
-		code, stdout, stderr := runCLI(t, importArgs(repoRoot, base,
+		code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base,
 			"--apply", "--update=proj/typo")...)
 		// Exit 0: the selector is a fact about the command line, and the
 		// repo did end up holding everything unprotected. The exit codes
@@ -437,7 +439,7 @@ func TestRunImport_JSONReportsTheScopeOfUpdate(t *testing.T) {
 
 	read := func(t *testing.T, extra ...string) map[string]any {
 		t.Helper()
-		_, stdout, stderr := runCLI(t, importArgs(repoRoot, base, append(extra, "--json")...)...)
+		_, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, append(extra, "--json")...)...)
 		var rep map[string]any
 		if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
 			t.Fatalf("unmarshal report: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
@@ -477,11 +479,11 @@ func TestRunImport_FailOnPending(t *testing.T) {
 
 		// The same run without the flag is the baseline: exit 0, which is
 		// the gap the flag exists to close.
-		if code, stdout, _ := runCLI(t, importArgs(repoRoot, base)...); code != exitOK {
+		if code, stdout, _ := runCLI(t, importArgs(t, repoRoot, base)...); code != exitOK {
 			t.Fatalf("without the flag, exit = %d, want %d\n%s", code, exitOK, stdout)
 		}
 
-		code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--fail-on-pending")...)
+		code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--fail-on-pending")...)
 		if code != exitAtRisk {
 			t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 		}
@@ -496,11 +498,11 @@ func TestRunImport_FailOnPending(t *testing.T) {
 	t.Run("a clean dry run exits 0", func(t *testing.T) {
 		base, repoRoot := importFixture(t)
 		projectAgent(t, base, "proj", "orphan", "only here\n")
-		if code, stdout, _ := runCLI(t, importArgs(repoRoot, base, "--apply")...); code != exitOK {
+		if code, stdout, _ := runCLI(t, importArgs(t, repoRoot, base, "--apply")...); code != exitOK {
 			t.Fatalf("apply exit = %d\n%s", code, stdout)
 		}
 
-		code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--fail-on-pending")...)
+		code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--fail-on-pending")...)
 		if code != exitOK {
 			t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 		}
@@ -513,7 +515,7 @@ func TestRunImport_FailOnPending(t *testing.T) {
 		base, repoRoot := importFixture(t)
 		projectAgent(t, base, "proj", "orphan", "only here\n")
 
-		code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--apply", "--fail-on-pending")...)
+		code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply", "--fail-on-pending")...)
 		if code != exitOK {
 			t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 		}
@@ -532,7 +534,7 @@ func TestRunImport_ConflictDoesNotBlockTheOtherProjects(t *testing.T) {
 	mustWriteT(t, backupPath(t, repoRoot, "blocked", "researcher"), "older capture\n")
 	projectAgent(t, base, "fine", "orphan", "only here\n")
 
-	code, stdout, _ := runCLI(t, importArgs(repoRoot, base, "--apply")...)
+	code, stdout, _ := runCLI(t, importArgs(t, repoRoot, base, "--apply")...)
 	if code != exitConflict {
 		t.Errorf("exit = %d, want %d\n%s", code, exitConflict, stdout)
 	}
@@ -576,7 +578,7 @@ func TestRunImport_UnreadableSubtreeIsNotACleanRun(t *testing.T) {
 	unreadable, inside := testfs.UnreadableSubtree(t, locked)
 	testfs.PlantAgent(t, inside, "proj", "hidden", "unreachable\n")
 
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply")...)
 	if code != exitConflict {
 		t.Errorf("exit = %d, want %d: an unreadable subtree cannot be a clean import\nstdout:\n%s\nstderr:\n%s",
 			code, exitConflict, stdout, stderr)
@@ -620,7 +622,7 @@ func TestRunImport_UnreadableSubtreeBlocksAnOtherwiseEmptyRun(t *testing.T) {
 	_, inside := testfs.UnreadableSubtree(t, locked)
 	testfs.PlantAgentsDir(t, inside, "proj")
 
-	code, stdout, _ := runCLI(t, importArgs(repoRoot, base, "--apply")...)
+	code, stdout, _ := runCLI(t, importArgs(t, repoRoot, base, "--apply")...)
 	if code != exitConflict {
 		t.Errorf("exit = %d, want %d\n%s", code, exitConflict, stdout)
 	}
@@ -648,7 +650,7 @@ func TestRunImport_WrongHomeWritesNothing(t *testing.T) {
 	wrongHome := t.TempDir()
 	t.Setenv("HOME", wrongHome)
 
-	code, stdout, stderr := runCLI(t, importArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d: a wrong $HOME must stop a write path", code, exitFailure)
 	}
@@ -667,7 +669,7 @@ func TestRunImport_WrongHomeWritesNothing(t *testing.T) {
 
 	// The legitimate case the guard must not break: projects that really do
 	// live outside $HOME, opted in explicitly.
-	code, _, stderr = runCLI(t, importArgs(repoRoot, base, "--apply", "--allow-outside-home")...)
+	code, _, stderr = runCLI(t, importArgs(t, repoRoot, base, "--apply", "--allow-outside-home")...)
 	if code != exitOK {
 		t.Fatalf("opted-in exit = %d, want %d\nstderr:\n%s", code, exitOK, stderr)
 	}
@@ -686,7 +688,7 @@ func TestRunImport_NoHomeWritesNothingEvenWhenOptedIn(t *testing.T) {
 	projectAgent(t, base, "proj", "orphan", "only here\n")
 	t.Setenv("HOME", "")
 
-	code, _, stderr := runCLI(t, importArgs(repoRoot, base, "--apply", "--allow-outside-home")...)
+	code, _, stderr := runCLI(t, importArgs(t, repoRoot, base, "--apply", "--allow-outside-home")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d", code, exitFailure)
 	}
@@ -710,7 +712,7 @@ func TestRunImport_TrackedInItsOwnRepoNeedsTheFlag(t *testing.T) {
 	gitRun(t, tracked, "add", ".")
 	gitRun(t, tracked, "commit", "-qm", "agents")
 
-	code, stdout, _ := runCLI(t, importArgs(repoRoot, base, "--apply")...)
+	code, stdout, _ := runCLI(t, importArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\n%s", code, exitOK, stdout)
 	}
@@ -723,7 +725,7 @@ func TestRunImport_TrackedInItsOwnRepoNeedsTheFlag(t *testing.T) {
 		t.Errorf("the report does not account for the skipped file:\n%s", stdout)
 	}
 
-	code, stdout, _ = runCLI(t, importArgs(repoRoot, base, "--apply", "--include-tracked")...)
+	code, stdout, _ = runCLI(t, importArgs(t, repoRoot, base, "--apply", "--include-tracked")...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\n%s", code, exitOK, stdout)
 	}
@@ -740,7 +742,7 @@ func TestRunImport_JSONReportsTheWholePlan(t *testing.T) {
 	projectAgent(t, base, "bbb", "researcher", "current\n")
 	mustWriteT(t, backupPath(t, repoRoot, "bbb", "researcher"), "older capture\n")
 
-	code, stdout, _ := runCLI(t, importArgs(repoRoot, base, "--json")...)
+	code, stdout, _ := runCLI(t, importArgs(t, repoRoot, base, "--json")...)
 	if code != exitConflict {
 		t.Errorf("exit = %d, want %d", code, exitConflict)
 	}
@@ -788,7 +790,7 @@ func TestRunImport_DiagnosticsStayOffStdout(t *testing.T) {
 	base, repoRoot := importFixture(t)
 	projectAgent(t, base, "proj", "orphan", "only here\n")
 
-	_, stdout, _ := runCLI(t, importArgs(repoRoot, base, "--json", "--apply")...)
+	_, stdout, _ := runCLI(t, importArgs(t, repoRoot, base, "--json", "--apply")...)
 	var decoded map[string]any
 	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
 		t.Fatalf("stdout is not parseable JSON: %v\n%s", err, stdout)
@@ -801,7 +803,7 @@ func TestRunImport_BadFlagReportsOnceAndWritesNothing(t *testing.T) {
 	base, repoRoot := importFixture(t)
 	projectAgent(t, base, "proj", "orphan", "only here\n")
 
-	code, _, stderr := runCLI(t, importArgs(repoRoot, base, "--nonexistent")...)
+	code, _, stderr := runCLI(t, importArgs(t, repoRoot, base, "--nonexistent")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d", code, exitFailure)
 	}
@@ -815,7 +817,7 @@ func TestRunImport_BadFlagReportsOnceAndWritesNothing(t *testing.T) {
 
 func TestRunImport_MissingRepoFails(t *testing.T) {
 	base, _ := importFixture(t)
-	code, _, stderr := runCLI(t, importArgs(filepath.Join(base, "no-such-repo"), base, "--apply")...)
+	code, _, stderr := runCLI(t, importArgs(t, filepath.Join(base, "no-such-repo"), base, "--apply")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d", code, exitFailure)
 	}

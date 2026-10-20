@@ -43,8 +43,10 @@ repo = "~/src/my-agents"   # your canonical agents repo
 root = "~/src"             # the tree holding your projects
 ```
 
-`--repo` and `--root`, or `$AGENTSYNC_REPO` and `$AGENTSYNC_ROOT`, work too and
-take precedence; see [configuration](docs/configuration.md) and [init](docs/init.md).
+`$AGENTSYNC_REPO` and `$AGENTSYNC_ROOT` work too and take precedence; see
+[configuration](docs/configuration.md) and [init](docs/init.md). Every command
+but `init` and `inventory` works on the project you run it in, so `cd` into a
+project first.
 
 ```bash
 cd ~/src/api

@@ -38,8 +38,10 @@ func reconcileFixture(t *testing.T) (base, repoRoot string) {
 	return base, repoRoot
 }
 
-func reconcileArgs(repoRoot, root string, extra ...string) []string {
-	return append([]string{"reconcile", "--repo", repoRoot, "--root", root}, extra...)
+func reconcileArgs(t *testing.T, repoRoot, root string, extra ...string) []string {
+	t.Helper()
+	inTree(t, repoRoot, root)
+	return append([]string{"reconcile", "--" + allFlag}, extra...)
 }
 
 // recordInState plants the record link --apply would have written, so a test
@@ -100,7 +102,7 @@ func TestRunReconcile_DryRunIsTheDefault(t *testing.T) {
 	base, repoRoot := reconcileFixture(t)
 	path, _ := brokenRecordedLink(t, base, repoRoot, "Web/proj", "a")
 
-	code, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag)...)
+	code, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\n%s", code, exitOK, stdout)
 	}
@@ -119,7 +121,7 @@ func TestRunReconcile_PruneAppliesAndIsIdempotent(t *testing.T) {
 	base, repoRoot := reconcileFixture(t)
 	path, _ := brokenRecordedLink(t, base, repoRoot, "Web/proj", "a")
 
-	code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
+	code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 	}
@@ -134,7 +136,7 @@ func TestRunReconcile_PruneAppliesAndIsIdempotent(t *testing.T) {
 		t.Errorf("pruning wrote a declined marker: %v", st.AllDeclined())
 	}
 
-	code, stdout, _ = runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
+	code, stdout, _ = runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
 	if code != exitOK {
 		t.Errorf("second run exit = %d, want %d\n%s", code, exitOK, stdout)
 	}
@@ -217,7 +219,7 @@ func TestRunReconcile_ExitCodes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			base, repoRoot := reconcileFixture(t)
 			extra := tc.setup(t, base, repoRoot)
-			code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, extra...)...)
+			code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, extra...)...)
 			if code != tc.want {
 				t.Errorf("exit = %d, want %d\n%s\n%s", code, tc.want, stdout, stderr)
 			}
@@ -238,7 +240,7 @@ func TestRunReconcile_DeclineIsHonouredByLinkAndUndoneByIt(t *testing.T) {
 	mustMkdirT(t, filepath.Dir(path))
 	recordInState(t, repoRoot, project, "a", path, target)
 
-	code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("reconcile exit = %d\n%s\n%s", code, stdout, stderr)
 	}
@@ -247,7 +249,7 @@ func TestRunReconcile_DeclineIsHonouredByLinkAndUndoneByIt(t *testing.T) {
 	}
 
 	// link must now refuse to recreate it, and say so rather than skipping.
-	code, stdout, _ = runCLI(t, linkArgs(repoRoot, base,
+	code, stdout, _ = runCLI(t, linkArgs(t, repoRoot, base,
 		"--project", project, "--agent", "a", "--apply")...)
 	if code != exitOK {
 		t.Errorf("link exit = %d, want %d\n%s", code, exitOK, stdout)
@@ -260,7 +262,7 @@ func TestRunReconcile_DeclineIsHonouredByLinkAndUndoneByIt(t *testing.T) {
 	}
 
 	// And --undecline is the override, which is a write like any other.
-	code, stdout, _ = runCLI(t, linkArgs(repoRoot, base,
+	code, stdout, _ = runCLI(t, linkArgs(t, repoRoot, base,
 		"--project", project, "--agent", "a", "--undecline="+project+"/a", "--apply")...)
 	if code != exitOK {
 		t.Fatalf("link --undecline exit = %d\n%s", code, stdout)
@@ -299,7 +301,7 @@ func TestRunReconcile_SelectorsRefuseAValueThatIsNotAPair(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			base, repoRoot := reconcileFixture(t)
-			code, _, stderr := runCLI(t, reconcileArgs(repoRoot, base, tc.args...)...)
+			code, _, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, tc.args...)...)
 			if code != exitFailure {
 				t.Errorf("exit = %d, want %d\n%s", code, exitFailure, stderr)
 			}
@@ -324,7 +326,7 @@ func TestRunReconcile_RefusesAPositionalArgument(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			base, repoRoot := reconcileFixture(t)
-			code, _, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--", tc.arg)...)
+			code, _, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--", tc.arg)...)
 			if code != exitFailure {
 				t.Fatalf("exit = %d, want %d\n%s", code, exitFailure, stderr)
 			}
@@ -348,7 +350,7 @@ func TestRunReconcile_RefusesAPositionalArgument(t *testing.T) {
 func TestRunReconcile_RepeatedSelectorsAreDeduplicated(t *testing.T) {
 	base, repoRoot := reconcileFixture(t)
 
-	_, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base,
+	_, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base,
 		"--"+reconcile.DropCaptureFlag+"=Web/proj/nope",
 		"--"+reconcile.DropCaptureFlag+"=Web/proj/nope",
 		"--"+reconcile.RekeyFlag+"=Web/a=Web/b",
@@ -393,7 +395,7 @@ func TestRunReconcile_RekeyMovesCapturesAndRepointsLinks(t *testing.T) {
 	recordInState(t, repoRoot, newKey, "a", path, oldCapture)
 
 	move := "--" + reconcile.RekeyFlag + "=" + oldKey + "=" + newKey
-	code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, move)...)
+	code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, move)...)
 	if code != exitOK {
 		t.Fatalf("dry run exit = %d\n%s\n%s", code, stdout, stderr)
 	}
@@ -402,7 +404,7 @@ func TestRunReconcile_RekeyMovesCapturesAndRepointsLinks(t *testing.T) {
 	}
 	assertIsRegular(t, oldCapture, "a dry run moves nothing")
 
-	code, stdout, stderr = runCLI(t, reconcileArgs(repoRoot, base, move, "--apply")...)
+	code, stdout, stderr = runCLI(t, reconcileArgs(t, repoRoot, base, move, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("apply exit = %d\n%s\n%s", code, stdout, stderr)
 	}
@@ -434,7 +436,7 @@ func TestRunReconcile_RekeyIsProposedNotApplied(t *testing.T) {
 	mustWriteT(t, oldCapture, "captured\n")
 	mustWriteT(t, projectAgentPath(base, "Web/proj", "a"), "captured\n")
 
-	code, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base)...)
+	code, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\n%s", code, exitOK, stdout)
 	}
@@ -461,7 +463,7 @@ func TestRunReconcile_AdoptRecordsUnownedLinksAndSaysWhatItCannotKnow(t *testing
 		t.Fatalf("symlink: %v", err)
 	}
 
-	code, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base)...)
+	code, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Fatalf("exit = %d\n%s", code, stdout)
 	}
@@ -469,7 +471,7 @@ func TestRunReconcile_AdoptRecordsUnownedLinksAndSaysWhatItCannotKnow(t *testing
 		t.Errorf("the report does not say how to record an unowned link:\n%s", stdout)
 	}
 
-	code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.AdoptFlag, "--apply")...)
+	code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.AdoptFlag, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d\n%s\n%s", code, stdout, stderr)
 	}
@@ -497,7 +499,7 @@ func TestRunReconcile_AnUnjudgeablePathIsExitTwo(t *testing.T) {
 	recordInState(t, repoRoot, project, "a", path, target)
 	mustMkdirT(t, path)
 
-	code, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
+	code, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d\n%s", code, exitFailure, stdout)
 	}
@@ -520,7 +522,7 @@ func TestRunReconcile_DropCaptureNeedsTheBytesInHEAD(t *testing.T) {
 		capture := filepath.Join(repoRoot, "project-agents", "Web", "proj", "cap.md")
 		mustWriteT(t, capture, "never committed\n")
 
-		code, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base,
+		code, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base,
 			"--"+reconcile.DropCaptureFlag+"="+project+"/cap", "--apply")...)
 		if code != exitAtRisk {
 			t.Errorf("exit = %d, want %d\n%s", code, exitAtRisk, stdout)
@@ -536,7 +538,7 @@ func TestRunReconcile_DropCaptureNeedsTheBytesInHEAD(t *testing.T) {
 		testfs.GitRepo(t, repoRoot, "project-agents/Web/proj/cap.md", "captured\n")
 		capture := filepath.Join(repoRoot, "project-agents", "Web", "proj", "cap.md")
 
-		code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base,
+		code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base,
 			"--"+reconcile.DropCaptureFlag+"="+project+"/cap", "--apply")...)
 		if code != exitOK {
 			t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
@@ -563,13 +565,13 @@ func TestRunReconcile_WrongHomeWritesNothing(t *testing.T) {
 	mustMkdirT(t, elsewhere)
 	t.Setenv("HOME", elsewhere)
 
-	code, _, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
+	code, _, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d\n%s", code, exitFailure, stderr)
 	}
 	assertIsLinkPath(t, path, "a run refused by the home guard writes nothing")
 
-	code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag)...)
+	code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag)...)
 	if code == exitFailure {
 		t.Errorf("the dry run failed rather than warning\n%s\n%s", stdout, stderr)
 	}
@@ -586,7 +588,7 @@ func TestRunReconcile_JSONReport(t *testing.T) {
 	base, repoRoot := reconcileFixture(t)
 	path, _ := brokenRecordedLink(t, base, repoRoot, "Web/proj", "a")
 
-	code, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base,
+	code, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base,
 		"--"+reconcile.PruneFlag, "--apply", "--json")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d\n%s", code, stdout)
@@ -655,7 +657,7 @@ func TestRunReconcile_ReportPointsAtDoctorForWhatItCannotSettle(t *testing.T) {
 	mustMkdirT(t, projectAgentPathDir(base, "Web/proj"))
 	mustWriteT(t, filepath.Join(repoRoot, "project-agents", "Web", "proj", "gone.md"), "captured\n")
 
-	code, stdout, _ := runCLI(t, reconcileArgs(repoRoot, base)...)
+	code, stdout, _ := runCLI(t, reconcileArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d — a stale capture is doctor's to fail on\n%s", code, exitOK, stdout)
 	}
@@ -672,7 +674,7 @@ func TestRunReconcile_AnUnreadableStateFileStopsTheRun(t *testing.T) {
 	path, _ := brokenRecordedLink(t, base, repoRoot, "Web/proj", "a")
 	mustWriteT(t, filepath.Join(repoRoot, state.FileName), `{"schema": 99, "links": []}`)
 
-	code, _, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
+	code, _, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--"+reconcile.PruneFlag, "--apply")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d", code, exitFailure)
 	}
@@ -723,7 +725,7 @@ func TestRunReconcile_AMovedProjectWritesNoMarkers(t *testing.T) {
 		t.Fatalf("moving the project: %v", err)
 	}
 
-	code, stdout, stderr := runCLI(t, reconcileArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\n%s\n%s", code, exitOK, stdout, stderr)
 	}
