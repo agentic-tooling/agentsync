@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// TestMain points HOME and XDG_CONFIG_HOME at empty temp dirs, so no test can
-// read the developer's real config file and pass or fail because of it. It
-// also clears the OpenRouter key, so no test can spend money, and the Claude
+// TestMain points HOME and XDG_CONFIG_HOME at empty temp dirs and clears both
+// AGENTSYNC_* variables, so no test can reach the developer's real repo or tree.
+// It also clears the OpenRouter key, so no test can spend money, and the Claude
 // overrides optimize reports.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "agentsync-test-")
@@ -25,6 +25,8 @@ func TestMain(m *testing.M) {
 		os.Setenv("HOME", home),
 		os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg")),
 		os.Unsetenv(envOpenRouterKey),
+		os.Unsetenv(envRepo),
+		os.Unsetenv(envRoot),
 		os.Unsetenv("CLAUDE_CODE_SUBAGENT_MODEL"),
 		os.Unsetenv("CLAUDE_CODE_EFFORT_LEVEL"),
 	} {
@@ -56,17 +58,14 @@ func useConfig(t *testing.T, content string) string {
 }
 
 func TestOpenRepo_Precedence(t *testing.T) {
-	flagDir, envDir, fileDir := t.TempDir(), t.TempDir(), t.TempDir()
+	envDir, fileDir := t.TempDir(), t.TempDir()
 	tests := []struct {
-		name, flag, env, file, want, wantFrom string
+		name, env, file, want, wantFrom string
 	}{
-		{"file alone", "", "", fileDir, fileDir, "config file"},
-		{"env alone", "", envDir, "", envDir, "$" + envRepo},
-		{"flag alone", flagDir, "", "", flagDir, "--repo"},
-		{"env beats file", "", envDir, fileDir, envDir, "$" + envRepo},
-		{"flag beats env and file", flagDir, envDir, fileDir, flagDir, "--repo"},
-		{"blank flag counts as unset", "  ", envDir, "", envDir, "$" + envRepo},
-		{"blank env counts as unset", "", "  ", fileDir, fileDir, "config file"},
+		{"file alone", "", fileDir, fileDir, "config file"},
+		{"env alone", envDir, "", envDir, "$" + envRepo},
+		{"env beats file", envDir, fileDir, envDir, "$" + envRepo},
+		{"blank env counts as unset", "  ", fileDir, fileDir, "config file"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,7 +76,7 @@ func TestOpenRepo_Precedence(t *testing.T) {
 			path := useConfig(t, content)
 			t.Setenv(envRepo, tc.env)
 
-			repo, from, err := openRepo(tc.flag)
+			repo, from, err := openRepo()
 			if err != nil {
 				t.Fatalf("openRepo: %v", err)
 			}
@@ -92,6 +91,17 @@ func TestOpenRepo_Precedence(t *testing.T) {
 				t.Errorf("from = %q, want %q", from, wantFrom)
 			}
 		})
+	}
+}
+
+// TestOpenRepo_RelativeEnvRefuses: a relative $AGENTSYNC_REPO would name a
+// different repo from every directory, so it refuses before the file is read.
+func TestOpenRepo_RelativeEnvRefuses(t *testing.T) {
+	useConfig(t, "this is = = not toml\n")
+	t.Setenv(envRepo, "agents-repo")
+	_, _, err := openRepo()
+	if want := `$AGENTSYNC_REPO must be an absolute path, got "agents-repo"`; err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
 	}
 }
 
@@ -212,10 +222,17 @@ func TestRun_BrokenConfigRefuses(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, path)
 			}
-			for _, args := range [][]string{
-				{"scan", "--root", wide},          // repo from the file
-				{"inventory", "--repo", repoRoot}, // root from the file
+			for _, c := range []struct {
+				args     []string
+				env, val string
+			}{
+				{[]string{"scan", "--all"}, envRoot, wide}, // repo from the file
+				{[]string{"inventory"}, envRepo, repoRoot}, // root from the file
 			} {
+				args := c.args
+				t.Setenv(envRepo, "")
+				t.Setenv(envRoot, "")
+				t.Setenv(c.env, c.val)
 				code, stdout, stderr := runCLI(t, args...)
 				if code != exitFailure {
 					t.Errorf("%v: exit = %d, want %d", args, code, exitFailure)
@@ -239,19 +256,15 @@ func TestRun_BrokenConfigUnreadWhenSettled(t *testing.T) {
 	repoRoot, wide := configFixture(t)
 	for _, tc := range []struct {
 		name string
-		env  bool
 		args []string
 	}{
-		{"both flags", false, []string{"scan", "--repo", repoRoot, "--root", wide}},
-		{"inventory, both flags", false, []string{"inventory", "--stdout", "--repo", repoRoot, "--root", wide}},
-		{"both env vars", true, []string{"scan", "--all"}},
+		{"scan", []string{"scan", "--all"}},
+		{"inventory", []string{"inventory", "--stdout"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useConfig(t, "this is = = not toml\n")
-			if tc.env {
-				t.Setenv(envRepo, repoRoot)
-				t.Setenv(envRoot, wide)
-			}
+			t.Setenv(envRepo, repoRoot)
+			t.Setenv(envRoot, wide)
 			if code, _, stderr := runCLI(t, tc.args...); code != exitOK {
 				t.Errorf("exit = %d, want %d: the broken file was read\n%s", code, exitOK, stderr)
 			}
@@ -260,30 +273,32 @@ func TestRun_BrokenConfigUnreadWhenSettled(t *testing.T) {
 }
 
 func TestRun_NothingConfiguredRefuses(t *testing.T) {
-	repoRoot, wide := configFixture(t)
+	repoRoot, _ := configFixture(t)
 	path := useConfig(t, "")
 
 	tests := []struct {
 		args []string
+		repo string
 		want string
 	}{
-		{[]string{"scan", "--root", wide},
+		{[]string{"scan"}, "",
 			"agentsync: no canonical agent repo configured.\n" +
 				"  Create a config file: agentsync init\n" +
-				"  Pass it each run: --repo PATH (or set $AGENTSYNC_REPO)\n" +
+				"  Or set $AGENTSYNC_REPO\n" +
 				"  Or set repo in " + path + "\n"},
-		{[]string{"inventory", "--repo", repoRoot},
+		{[]string{"inventory"}, repoRoot,
 			"agentsync: no default tree of projects configured.\n" +
 				"  Create a config file: agentsync init\n" +
-				"  Pass it each run: --root PATH (or set $AGENTSYNC_ROOT)\n" +
+				"  Or set $AGENTSYNC_ROOT\n" +
 				"  Or set root in " + path + "\n"},
-		{[]string{"scan", "--all", "--repo", repoRoot},
+		{[]string{"scan", "--all"}, repoRoot,
 			"agentsync: --all: no default tree of projects configured.\n" +
 				"  Create a config file: agentsync init\n" +
-				"  Pass it each run: --root PATH (or set $AGENTSYNC_ROOT)\n" +
+				"  Or set $AGENTSYNC_ROOT\n" +
 				"  Or set root in " + path + "\n"},
 	}
 	for _, tc := range tests {
+		t.Setenv(envRepo, tc.repo)
 		code, stdout, stderr := runCLI(t, tc.args...)
 		if code != exitFailure {
 			t.Errorf("%v: exit = %d, want %d", tc.args, code, exitFailure)
@@ -302,7 +317,7 @@ func TestRun_NothingConfiguredRefuses(t *testing.T) {
 func TestOpenRepo_BadPathNamesItsSource(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope")
 	path := useConfig(t, fmt.Sprintf("repo = %q\n", missing))
-	_, _, err := openRepo("")
+	_, _, err := openRepo()
 	if want := "repo from config file " + path + ": "; err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("err = %v, want it to start %q", err, want)
 	}
@@ -314,7 +329,7 @@ func TestRun_UnlocatableConfigRefuses(t *testing.T) {
 	useConfig(t, "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "")
-	code, _, stderr := runCLI(t, "scan", "--root", t.TempDir())
+	code, _, stderr := runCLI(t, "scan")
 	if code != exitFailure || !strings.Contains(stderr, "cannot locate the config file") {
 		t.Errorf("exit = %d, stderr = %q; want %d naming the config file", code, stderr, exitFailure)
 	}

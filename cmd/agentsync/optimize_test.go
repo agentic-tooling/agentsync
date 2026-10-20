@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -17,11 +18,12 @@ import (
 	"github.com/agentic-tooling/agentsync/internal/optimize"
 )
 
-const orTestdata = "../../internal/openrouter/testdata/"
+// orTestdata is made absolute before any test changes directory.
+var orTestdata, _ = filepath.Abs("../../internal/openrouter/testdata")
 
 func orFixture(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(orTestdata + name)
+	b, err := os.ReadFile(filepath.Join(orTestdata, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,11 +112,12 @@ func optimizeProject(t *testing.T, files map[string]string) (project, repoRoot s
 	for name, content := range files {
 		mustWriteT(t, filepath.Join(project, ".claude", "agents", name), content)
 	}
+	inProject(t, repoRoot, project)
 	return project, repoRoot
 }
 
 func TestOptimize_Report(t *testing.T) {
-	project, repoRoot := optimizeProject(t, map[string]string{
+	optimizeProject(t, map[string]string{
 		"go-merge-reviewer.md": agentFile("go-merge-reviewer", "opus", "xhigh"),
 		"README.md":            "not an agent\n",
 	})
@@ -122,13 +125,13 @@ func TestOptimize_Report(t *testing.T) {
 	f.start(t)
 	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "low")
 
-	code, stdout, stderr := runCLI(t, "optimize", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\n%s", code, exitOK, stderr)
 	}
 	for _, w := range []string{
-		"Repo: ~/Web/agents-repo (from --repo).",
-		"Root: ~/Web/proj (from --root).",
+		"Repo: ~/Web/agents-repo (from $AGENTSYNC_REPO).",
+		"Root: ~/Web/proj (from the current directory, which is in a project: .claude/agents) — pass --all to widen.",
 		"Note: $CLAUDE_CODE_EFFORT_LEVEL is set",
 		"Asked ~typesafe/jev-latest about 1 agent (cap $0.50, min confidence 0.60).",
 		"AGENT              NOW           SUGGESTED              CONFIDENCE",
@@ -149,12 +152,12 @@ func TestOptimize_Report(t *testing.T) {
 }
 
 func TestOptimize_JSON(t *testing.T) {
-	project, repoRoot := optimizeProject(t, map[string]string{"a.md": agentFile("a", "sonnet", "high")})
+	optimizeProject(t, map[string]string{"a.md": agentFile("a", "sonnet", "high")})
 	f := &fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{orFixture(t, "decision-clef.json")}}
 	f.start(t)
 	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "haiku")
 
-	code, stdout, stderr := runCLI(t, "optimize", "--json", "--advisor", "cloudflare/clef", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--json", "--advisor", "cloudflare/clef")
 	if code != exitOK {
 		t.Fatalf("exit = %d\n%s", code, stderr)
 	}
@@ -179,10 +182,10 @@ func TestOptimize_JSON(t *testing.T) {
 }
 
 func TestOptimize_JSONWriteFails(t *testing.T) {
-	project, repoRoot := optimizeProject(t, map[string]string{"a.md": agentFile("a", "opus", "high")})
+	optimizeProject(t, map[string]string{"a.md": agentFile("a", "opus", "high")})
 	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{orFixture(t, "decision-clef.json")}}).start(t)
 	var stderr bytes.Buffer
-	if code := runOptimize([]string{"--json", "--root", project, "--repo", repoRoot}, failWriter{}, &stderr); code != exitFailure {
+	if code := runOptimize([]string{"--json"}, failWriter{}, &stderr); code != exitFailure {
 		t.Errorf("exit = %d, want %d\n%s", code, exitFailure, stderr.String())
 	}
 }
@@ -192,7 +195,7 @@ type failWriter struct{}
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("closed") }
 
 func TestOptimize_UnresolvedAndSkippedExitOne(t *testing.T) {
-	project, repoRoot := optimizeProject(t, map[string]string{
+	optimizeProject(t, map[string]string{
 		"a.md": agentFile("a", "opus", "high"),
 		"b.md": agentFile("b", "opus", "high"),
 	})
@@ -200,7 +203,7 @@ func TestOptimize_UnresolvedAndSkippedExitOne(t *testing.T) {
 	f.start(t)
 	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "haiku")
 
-	code, stdout, stderr := runCLI(t, "optimize", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize")
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d", code, exitAtRisk)
 	}
@@ -236,9 +239,10 @@ func TestOptimize_AgentSelectionAndDedup(t *testing.T) {
 	f := &fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef, clef, clef}}
 	f.start(t)
 	web := filepath.Join(home, "Web")
+	inTree(t, filepath.Join(web, "agents-repo"), web)
 
 	// The shared file is asked about once, under the first project linking it.
-	code, stdout, stderr := runCLI(t, "optimize", "--root", web, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--all")
 	if code != exitOK {
 		t.Fatalf("exit = %d\n%s", code, stderr)
 	}
@@ -251,12 +255,12 @@ func TestOptimize_AgentSelectionAndDedup(t *testing.T) {
 		t.Errorf("%d requests, want 3 with the shared file once:\n%s", f.requests(), stdout)
 	}
 
-	code, stdout, stderr = runCLI(t, "optimize", "--agent", "shared", "--root", web, "--repo", repoRoot)
+	code, stdout, stderr = runCLI(t, "optimize", "--agent", "shared", "--all")
 	if code != exitOK || f.requests() != 4 || strings.Contains(stdout, "own") {
 		t.Errorf("--agent shared: exit %d, %d requests in all, want 4:\n%s%s", code, f.requests(), stdout, stderr)
 	}
 
-	code, _, stderr = runCLI(t, "optimize", "--agent", "shared", "--agent", "nope", "--root", web, "--repo", repoRoot)
+	code, _, stderr = runCLI(t, "optimize", "--agent", "shared", "--agent", "nope", "--all")
 	if code != exitFailure || !strings.Contains(stderr, "--agent nope: no Claude agent by that name") {
 		t.Errorf("exit = %d, stderr:\n%s", code, stderr)
 	}
@@ -276,7 +280,7 @@ func TestOptimize_RefusesBeforeAnyRequest(t *testing.T) {
 	}{
 		{name: "help", args: []string{"-h"}, code: exitOK},
 		{name: "unknown flag", args: []string{"--nope"}, code: exitFailure, stderr: "flag provided but not defined"},
-		{name: "positional", args: []string{"extra"}, code: exitFailure, stderr: `optimize takes no arguments, got "extra"`},
+		{name: "positional", args: []string{"extra"}, code: exitFailure, stderr: `unexpected argument "extra"; optimize takes flags only.`},
 		{name: "empty advisor", args: []string{"--advisor", " "}, code: exitFailure, stderr: "--advisor is empty"},
 		{name: "negative cap", args: []string{"--max-cost", "-1"}, code: exitFailure, stderr: "--max-cost must be"},
 		{name: "infinite cap", args: []string{"--max-cost", "Inf"}, code: exitFailure, stderr: "--max-cost must be"},
@@ -284,10 +288,11 @@ func TestOptimize_RefusesBeforeAnyRequest(t *testing.T) {
 		{name: "no key", setup: func(t *testing.T, _ string) { t.Setenv(envOpenRouterKey, "") },
 			code: exitFailure, stderr: "$OPENROUTER_API_KEY"},
 		{name: "no repo", setup: func(t *testing.T, _ string) { t.Setenv(envRepo, "") },
-			args: []string{"--repo", ""}, code: exitFailure, stderr: "no canonical agent repo configured"},
-		{name: "root and all", args: []string{"--all"}, code: exitFailure, stderr: "mutually exclusive"},
+			code: exitFailure, stderr: "no canonical agent repo configured"},
+		{name: "all without a default tree", setup: func(t *testing.T, _ string) { t.Setenv(envRoot, "") },
+			args: []string{"--all"}, code: exitFailure, stderr: "--all: no default tree of projects configured"},
 		{name: "root missing", setup: func(t *testing.T, project string) { mustRemoveAll(t, project) },
-			code: exitFailure, stderr: "walking"},
+			code: exitFailure, stderr: deletedCwdRefusal()},
 		{name: "scan problem", files: map[string]string{"dir.md/x": "x"}, code: exitFailure, stderr: "could not read every agent under the root"},
 		{name: "broken link", setup: func(t *testing.T, project string) {
 			if err := os.Symlink(filepath.Join(project, "gone.md"), filepath.Join(project, ".claude", "agents", "b.md")); err != nil {
@@ -306,7 +311,7 @@ func TestOptimize_RefusesBeforeAnyRequest(t *testing.T) {
 			if files == nil {
 				files = good
 			}
-			project, repoRoot := optimizeProject(t, files)
+			project, _ := optimizeProject(t, files)
 			f := &fakeOpenRouter{models: orFixture(t, "models.json")}
 			if tc.fake != nil {
 				tc.fake(f)
@@ -315,7 +320,7 @@ func TestOptimize_RefusesBeforeAnyRequest(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, project)
 			}
-			args := append([]string{"optimize", "--root", project, "--repo", repoRoot}, tc.args...)
+			args := append([]string{"optimize"}, tc.args...)
 			code, stdout, stderr := runCLI(t, args...)
 			if code != tc.code || !strings.Contains(stderr, tc.stderr) {
 				t.Errorf("exit = %d, want %d; stderr missing %q:\n%s", code, tc.code, tc.stderr, stderr)
@@ -339,10 +344,10 @@ func mustRemoveAll(t *testing.T, p string) {
 }
 
 func TestOptimize_DryRunWritesNothing(t *testing.T) {
-	project, repoRoot := optimizeProject(t, map[string]string{"a.md": agentFile("a", "sonnet", "high")})
+	project, _ := optimizeProject(t, map[string]string{"a.md": agentFile("a", "sonnet", "high")})
 	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{orFixture(t, "decision-clef.json")}}).start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize")
 	if code != exitOK || !strings.Contains(stdout, "Dry run: nothing written. Run with --apply to write 1 change.\n") {
 		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
@@ -357,6 +362,7 @@ func TestOptimize_ApplyWritesTheCanonicalTarget(t *testing.T) {
 	home := mustResolveDir(t, t.TempDir())
 	t.Setenv("HOME", home)
 	web := filepath.Join(home, "Web")
+	inTree(t, filepath.Join(web, "agents-repo"), web)
 	repoRoot := filepath.Join(web, "agents-repo")
 	mustMkdirT(t, filepath.Join(repoRoot, "project-agents"))
 	target := filepath.Join(repoRoot, "agents", "shared.md")
@@ -364,13 +370,13 @@ func TestOptimize_ApplyWritesTheCanonicalTarget(t *testing.T) {
 	mustWriteT(t, target, content)
 	for _, p := range []string{"one", "two"} {
 		mustMkdirT(t, filepath.Join(web, p, ".claude"))
-		if code, out, errOut := runCLI(t, "link", "--repo", repoRoot, "--root", web, "--project", "Web/"+p, "--agent", "shared", "--apply"); code != exitOK {
+		if code, out, errOut := runCLI(t, "link", "--all", "--project", "Web/"+p, "--agent", "shared", "--apply"); code != exitOK {
 			t.Fatalf("link %s: exit %d\n%s%s", p, code, out, errOut)
 		}
 	}
 	before := map[string]string{}
 	for _, cmd := range []string{"doctor", "reconcile"} {
-		code, out, errOut := runCLI(t, cmd, "--root", web, "--repo", repoRoot)
+		code, out, errOut := runCLI(t, cmd, "--all")
 		if code != exitOK {
 			t.Fatalf("%s before the apply: exit %d\n%s%s", cmd, code, out, errOut)
 		}
@@ -379,7 +385,7 @@ func TestOptimize_ApplyWritesTheCanonicalTarget(t *testing.T) {
 	f := &fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{orFixture(t, "decision-clef.json"), orFixture(t, "decision-jev.json"), orFixture(t, "decision-clef.json")}}
 	f.start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", web, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--all")
 	if code != exitOK {
 		t.Fatalf("exit = %d\n%s%s", code, stdout, stderr)
 	}
@@ -400,14 +406,14 @@ func TestOptimize_ApplyWritesTheCanonicalTarget(t *testing.T) {
 		}
 	}
 	for cmd, was := range before {
-		if code, out, _ := runCLI(t, cmd, "--root", web, "--repo", repoRoot); code != exitOK || out != was {
+		if code, out, _ := runCLI(t, cmd, "--all"); code != exitOK || out != was {
 			t.Errorf("%s changed after the apply: exit %d\n%s\n->\n%s", cmd, code, was, out)
 		}
 	}
 
 	// Without a state file there is no link count to give.
 	mustRemoveAll(t, filepath.Join(repoRoot, ".agentsync-state.json"))
-	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--root", web, "--repo", repoRoot)
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--all")
 	if code != exitOK || !strings.Contains(stdout, "wrote ~/Web/agents-repo/agents/shared.md (canonical file)\n") {
 		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
@@ -417,7 +423,7 @@ func TestOptimize_ApplyWritesTheCanonicalTarget(t *testing.T) {
 
 	// An unreadable state file is warned about, not trusted for a count.
 	mustWriteT(t, filepath.Join(repoRoot, ".agentsync-state.json"), "{")
-	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--min-confidence", "0.5", "--root", web, "--repo", repoRoot)
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--min-confidence", "0.5", "--all")
 	if code != exitOK || !strings.Contains(stdout, "(canonical file)\n") || !strings.Contains(stderr, "warning: link counts not shown") {
 		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
@@ -426,7 +432,7 @@ func TestOptimize_ApplyWritesTheCanonicalTarget(t *testing.T) {
 // Only the confident differing part of a change row is written, in place;
 // keep and unresolved rows are left alone.
 func TestOptimize_ApplyEditsAProjectFileInPlace(t *testing.T) {
-	project, repoRoot := optimizeProject(t, map[string]string{
+	project, _ := optimizeProject(t, map[string]string{
 		"b.md": agentFile("b", "opus", "high"),
 		"c.md": agentFile("c", "opus", "low"),
 	})
@@ -442,7 +448,7 @@ func TestOptimize_ApplyEditsAProjectFileInPlace(t *testing.T) {
 	clef := orFixture(t, "decision-clef.json")
 	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef}}).start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--apply")
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d (c is unresolved)\n%s", code, exitAtRisk, stderr)
 	}
@@ -469,7 +475,7 @@ func TestOptimize_ApplyEditsAProjectFileInPlace(t *testing.T) {
 // written; the other rows still are.
 func TestOptimize_ApplyRefusals(t *testing.T) {
 	block := "---\nname: b\ndescription: d\nmodel: |\n  sonnet\n---\n"
-	project, repoRoot := optimizeProject(t, map[string]string{
+	project, _ := optimizeProject(t, map[string]string{
 		"a.md": agentFile("a", "sonnet", "high"),
 		"b.md": block,
 		"c.md": agentFile("c", "sonnet", "high"),
@@ -485,7 +491,7 @@ func TestOptimize_ApplyRefusals(t *testing.T) {
 	}
 	f.start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--json", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--json")
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\n%s", code, exitAtRisk, stderr)
 	}
@@ -510,7 +516,7 @@ func TestOptimize_ApplyRefusals(t *testing.T) {
 }
 
 func TestOptimize_ApplyWriteFailureExitsTwo(t *testing.T) {
-	project, repoRoot := optimizeProject(t, map[string]string{
+	project, _ := optimizeProject(t, map[string]string{
 		"a.md": agentFile("a", "sonnet", "high"),
 		"b.md": agentFile("b", "sonnet", "high"),
 	})
@@ -524,7 +530,7 @@ func TestOptimize_ApplyWriteFailureExitsTwo(t *testing.T) {
 	}
 	f.start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--apply")
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d\n%s", code, exitFailure, stderr)
 	}
@@ -537,12 +543,12 @@ func TestOptimize_ApplyWriteFailureExitsTwo(t *testing.T) {
 }
 
 func TestOptimize_ApplyNotesOverrideStillWins(t *testing.T) {
-	project, repoRoot, settings := overrideFixture(t)
+	_, _, settings := overrideFixture(t)
 	mustWriteT(t, settings, oneOverride)
 	clef := orFixture(t, "decision-clef.json")
 	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef, clef, clef}}).start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--agent", "a", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--agent", "a")
 	if code != exitOK {
 		t.Fatalf("exit %d\n%s", code, stderr)
 	}
@@ -554,13 +560,13 @@ func TestOptimize_ApplyNotesOverrideStillWins(t *testing.T) {
 	}
 
 	// b's model is written, but its override sets only effort, so nothing is masked.
-	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr = runCLI(t, "optimize", "--apply")
 	if code != exitOK || !strings.Contains(stdout, "wrote ~/Web/proj/.claude/agents/b.md\n") || strings.Contains(stdout, "still wins") {
 		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
 
 	// a's effort is written, but its override sets only model.
-	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--min-confidence", "0.5", "--agent", "a", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--min-confidence", "0.5", "--agent", "a")
 	if code != exitOK || !strings.Contains(stdout, "wrote ~/Web/proj/.claude/agents/a.md\n") || strings.Contains(stdout, "still wins") {
 		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
@@ -578,7 +584,7 @@ func TestOptimize_ApplyRefusesWhatAgentsyncLeavesAlone(t *testing.T) {
 	// A sibling whose path merely starts with the repo's is still outside it.
 	sibling := filepath.Join(repoRoot+"2", "agents", "e.md")
 	mustWriteT(t, sibling, agentFile("e", "sonnet", "high"))
-	if code, out, errOut := runCLI(t, "link", "--repo", repoRoot, "--root", project, "--project", "Web/proj", "--agent", "s", "--apply"); code != exitOK {
+	if code, out, errOut := runCLI(t, "link", "--project", "Web/proj", "--agent", "s", "--apply"); code != exitOK {
 		t.Fatalf("link: exit %d\n%s%s", code, out, errOut)
 	}
 	foreign := filepath.Join(home, "dotfiles", "d.md")
@@ -597,7 +603,7 @@ func TestOptimize_ApplyRefusesWhatAgentsyncLeavesAlone(t *testing.T) {
 	clef := orFixture(t, "decision-clef.json")
 	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef, clef, clef, clef, clef, clef, clef}}).start(t)
 
-	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr := runCLI(t, "optimize", "--apply")
 	if code != exitAtRisk {
 		t.Errorf("exit = %d, want %d\n%s", code, exitAtRisk, stderr)
 	}
@@ -619,8 +625,17 @@ func TestOptimize_ApplyRefusesWhatAgentsyncLeavesAlone(t *testing.T) {
 	}
 
 	mustWriteT(t, filepath.Join(repoRoot, ".agentsync-state.json"), "{")
-	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	code, stdout, stderr = runCLI(t, "optimize", "--apply")
 	if code != exitFailure || !strings.Contains(stdout, "s: not written: the state file could not be read") || strings.Contains(stderr, "warning") {
 		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
+}
+
+// deletedCwdRefusal is how a deleted working directory is refused: Linux getwd
+// fails outright, while macOS returns the stale path, which then fails to resolve.
+func deletedCwdRefusal() string {
+	if runtime.GOOS == "linux" {
+		return "could not determine the working directory"
+	}
+	return "could not resolve the working directory"
 }

@@ -28,8 +28,10 @@ func homeScanFixture(t *testing.T) (home, repoRoot, root string) {
 	return home, repoRoot, root
 }
 
-func scanArgs(repoRoot, root string, extra ...string) []string {
-	return append([]string{"scan", "--repo", repoRoot, "--root", root}, extra...)
+func scanArgs(t *testing.T, repoRoot, root string, extra ...string) []string {
+	t.Helper()
+	inTree(t, repoRoot, root)
+	return append([]string{"scan", "--" + allFlag}, extra...)
 }
 
 // TestRunScan_ValidButWrongHomeWarns is the issue itself. $HOME is a real,
@@ -48,7 +50,7 @@ func TestRunScan_ValidButWrongHomeWarns(t *testing.T) {
 	wrongHome := t.TempDir()
 	t.Setenv("HOME", wrongHome)
 
-	code, stdout, stderr := runCLI(t, scanArgs(repoRoot, root, "--json")...)
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, root, "--json")...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d: a suspect $HOME must not change the exit code", code, exitOK)
 	}
@@ -80,7 +82,7 @@ func TestRunScan_ValidButWrongHomeWarns(t *testing.T) {
 
 	// The scan still ran to completion and still found the file, and
 	// --fail-on-risk still means what it meant.
-	codeFail, _, _ := runCLI(t, scanArgs(repoRoot, root, "--fail-on-risk")...)
+	codeFail, _, _ := runCLI(t, scanArgs(t, repoRoot, root, "--fail-on-risk")...)
 	if codeFail != exitAtRisk {
 		t.Errorf("--fail-on-risk exit = %d, want %d: the unprotected file is still found",
 			codeFail, exitAtRisk)
@@ -90,10 +92,10 @@ func TestRunScan_ValidButWrongHomeWarns(t *testing.T) {
 // TestRunScan_WrongHomeAboveTheRootStillWarns is the end-to-end guard for the
 // shape that a root-based check gets wrong.
 //
-// `sudo -i agentsync scan --root /` (or --root /Users) puts $HOME=/var/root
-// UNDER the root being scanned. Anything that asks "is the root related to
-// $HOME?" answers yes and stays silent — while every project key is still
-// re-based under _outside-home/. The projects, not the root, decide.
+// `sudo -i agentsync scan --all` with a default tree of / (or /Users) puts
+// $HOME=/var/root UNDER the root being scanned. Anything that asks "is the
+// root related to $HOME?" answers yes and stays silent — while every project
+// key is still re-based under _outside-home/. The projects, not the root, decide.
 func TestRunScan_WrongHomeAboveTheRootStillWarns(t *testing.T) {
 	base := t.TempDir()
 
@@ -107,7 +109,7 @@ func TestRunScan_WrongHomeAboveTheRootStillWarns(t *testing.T) {
 	mustMkdirT(t, filepath.Join(repoRoot, "agents"))
 	mustWriteT(t, filepath.Join(base, "home", "Web", "proj", ".claude", "agents", "orphan.md"), "only here\n")
 
-	code, stdout, stderr := runCLI(t, scanArgs(repoRoot, base, "--json")...)
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, base, "--json")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
 	}
@@ -140,7 +142,7 @@ func TestRunScan_MixedProjectsDoNotWarn(t *testing.T) {
 	mustWriteT(t, filepath.Join(home, "Web", "proj", ".claude", "agents", "a.md"), "a\n")
 	mustWriteT(t, filepath.Join(base, "opt", "work", ".claude", "agents", "b.md"), "b\n")
 
-	code, stdout, stderr := runCLI(t, scanArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
 	}
@@ -161,7 +163,7 @@ func TestRunScan_EmptyHomeWarnsAndCompletes(t *testing.T) {
 	_, repoRoot, root := homeScanFixture(t)
 	t.Setenv("HOME", "")
 
-	code, stdout, stderr := runCLI(t, scanArgs(repoRoot, root)...)
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, root)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d", code, exitOK)
 	}
@@ -180,7 +182,7 @@ func TestRunScan_UnresolvableHomeWarns(t *testing.T) {
 	gone := filepath.Join(t.TempDir(), "no-such-home")
 	t.Setenv("HOME", gone)
 
-	code, _, stderr := runCLI(t, scanArgs(repoRoot, root)...)
+	code, _, stderr := runCLI(t, scanArgs(t, repoRoot, root)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d", code, exitOK)
 	}
@@ -204,7 +206,7 @@ func TestRunScan_OutsideHomeOptOutIsSilent(t *testing.T) {
 	mustWriteT(t, filepath.Join(outside, "work", ".claude", "agents", "orphan.md"), "only here\n")
 
 	code, stdout, stderr := runCLI(t,
-		scanArgs(repoRoot, outside, "--"+scan.AllowOutsideHomeFlag)...)
+		scanArgs(t, repoRoot, outside, "--"+scan.AllowOutsideHomeFlag)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d", code, exitOK)
 	}
@@ -217,7 +219,7 @@ func TestRunScan_OutsideHomeOptOutIsSilent(t *testing.T) {
 
 	// Without the flag the same run does warn — otherwise this test would
 	// pass even if the check had been removed entirely.
-	if _, _, stderr := runCLI(t, scanArgs(repoRoot, outside)...); stderr == "" {
+	if _, _, stderr := runCLI(t, scanArgs(t, repoRoot, outside)...); stderr == "" {
 		t.Error("without the opt-out the same run must warn")
 	}
 }
@@ -244,7 +246,7 @@ func TestRunScan_CorrectHomeIsSilent(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	for _, extra := range [][]string{nil, {"--json"}, {"--at-risk"}, {"--fail-on-risk"}} {
-		_, _, stderr := runCLI(t, scanArgs(repoRoot, root, extra...)...)
+		_, _, stderr := runCLI(t, scanArgs(t, repoRoot, root, extra...)...)
 		if got := withoutChoiceLines(stderr); got != "" {
 			t.Errorf("correct run with %v wrote to stderr:\n%s", extra, got)
 		}
@@ -259,7 +261,7 @@ func TestRunScan_HomeWarningStaysOffStdout(t *testing.T) {
 	wrongHome := t.TempDir()
 	t.Setenv("HOME", wrongHome)
 
-	code, stdout, stderr := runCLI(t, scanArgs(repoRoot, root, "--json")...)
+	code, stdout, stderr := runCLI(t, scanArgs(t, repoRoot, root, "--json")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
 	}

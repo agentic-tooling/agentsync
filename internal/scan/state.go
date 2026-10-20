@@ -592,7 +592,7 @@ var reservedKeyRoots = map[string]bool{
 //   - Unique. Two distinct directories differ in some path component, and the
 //     key preserves every component, so their keys differ too.
 //   - Independent of the scan root. It is computed from the project's absolute
-//     path and home, never from the --root the caller passed, so ~/Web/example
+//     path and home, never from the root the caller scanned, so ~/Web/example
 //     keys as Web/example whether the scan started at ~/Web, at ~, or at the
 //     project itself. A root-relative key would rename the project depending on
 //     how it was found, and counterpart lookup would miss.

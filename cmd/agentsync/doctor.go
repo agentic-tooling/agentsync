@@ -28,8 +28,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerAll(fs)
 	asJSON := fs.Bool("json", false, "emit JSON")
 	allowOutsideHome := fs.Bool(scan.AllowOutsideHomeFlag, false,
 		"projects legitimately live outside $HOME; suppress the home warning")
@@ -42,14 +41,18 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		// block to stderr.
 		return exitFailure
 	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "agentsync: %s\n", strayArg("doctor", fs.Arg(0), nil))
+		return exitFailure
+	}
 
-	repo, repoFrom, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo()
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
 	}
 
-	root, err := rootF.resolve(repo.Home)
+	root, err := resolveRoot(repo.Home, *all)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure

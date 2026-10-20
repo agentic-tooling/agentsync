@@ -3,7 +3,8 @@
 `agentsync import` copies project-only agents into the canonical repo under
 `project-agents/<project-key>/`, so nothing is lost when `link` later replaces
 the file with a symlink. It writes only into the canonical repo, never into a
-project's `.claude/agents/`, and only with `--apply`.
+project's `.claude/agents/`, and only with `--apply`. Run it from the project
+directory; `--all` covers the whole default tree instead.
 
 ```bash
 agentsync import                 # dry run: what a capture would do

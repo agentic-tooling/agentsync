@@ -22,8 +22,8 @@ agentsync link --exclude-local --apply      # project's own git tracks .claude/a
 | `--undecline=KEY` | clear the declined marker for one `<project>/<name>`; repeatable; needs `--apply` |
 
 `--agent` with no project selected is refused: it would provision every project
-under the scan root. Inside a project the derived root selects it (see
-[configuration](configuration.md)). `link` does not decide which agents a
+under the scan root. Run it from the project directory, which selects that
+project (see [configuration](configuration.md)). `link` does not decide which agents a
 project should have; it provisions what it is told to.
 
 ## Rules

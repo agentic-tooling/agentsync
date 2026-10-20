@@ -32,8 +32,10 @@ func linkFixture(t *testing.T) (base, repoRoot string) {
 	return base, repoRoot
 }
 
-func linkArgs(repoRoot, root string, extra ...string) []string {
-	return append([]string{"link", "--repo", repoRoot, "--root", root}, extra...)
+func linkArgs(t *testing.T, repoRoot, root string, extra ...string) []string {
+	t.Helper()
+	inTree(t, repoRoot, root)
+	return append([]string{"link", "--" + allFlag}, extra...)
 }
 
 // globalAgent writes an agent into the repo's global pool and returns the path
@@ -94,7 +96,7 @@ func TestRunLink_DryRunIsTheDefault(t *testing.T) {
 	path := projectAgentPath(base, "proj", "shared")
 	mustWriteT(t, path, body)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base)...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base)...)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -120,13 +122,13 @@ func TestRunLink_ApplyLinksAndIsIdempotent(t *testing.T) {
 	path := projectAgentPath(base, "proj", "shared")
 	mustWriteT(t, path, body)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
 	assertIsLink(t, path, target)
 
-	code, stdout, stderr = runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr = runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("second run exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -153,7 +155,7 @@ func TestRunLink_OverrideLinksToItsOwnCapture(t *testing.T) {
 	path := projectAgentPath(base, "Web/content-pipeline", "web-researcher")
 	mustWriteT(t, path, custom)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -188,7 +190,7 @@ func TestRunLink_UncapturedFileBlocksItsProjectOnly(t *testing.T) {
 	safe := projectAgentPath(base, "safe", "shared")
 	mustWriteT(t, safe, body)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitAtRisk {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -212,7 +214,7 @@ func TestRunLink_BrokenLinkIsReportedAndKept(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitAtRisk {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -243,7 +245,7 @@ func TestRunLink_ForeignLinkIsUntouchedAndDoesNotFailTheRun(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d: a foreign link must not fail the run\nstdout:\n%s\nstderr:\n%s",
 			code, exitOK, stdout, stderr)
@@ -283,7 +285,7 @@ func TestRunLink_TrackedAgentsDirectoryIsRefusedUntilExcluded(t *testing.T) {
 	exclude := filepath.Join(projectDir, ".git", "info", "exclude")
 	gitignore := filepath.Join(projectDir, ".gitignore")
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitAtRisk {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -295,7 +297,7 @@ func TestRunLink_TrackedAgentsDirectoryIsRefusedUntilExcluded(t *testing.T) {
 	// A dry run with the flag must still write nothing at all — including
 	// nothing to the exclude file, which is an edit to somebody's repository.
 	before := readFileT(t, exclude)
-	code, stdout, stderr = runCLI(t, linkArgs(repoRoot, base, "--exclude-local")...)
+	code, stdout, stderr = runCLI(t, linkArgs(t, repoRoot, base, "--exclude-local")...)
 	if code != exitOK {
 		t.Fatalf("dry run exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -314,7 +316,7 @@ func TestRunLink_TrackedAgentsDirectoryIsRefusedUntilExcluded(t *testing.T) {
 		t.Errorf("the dry run does not carry the exclusion caveat:\n%s", stdout)
 	}
 
-	code, stdout, stderr = runCLI(t, linkArgs(repoRoot, base, "--exclude-local", "--apply")...)
+	code, stdout, stderr = runCLI(t, linkArgs(t, repoRoot, base, "--exclude-local", "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -345,7 +347,7 @@ func TestRunLink_IgnoredAgentsDirectoryIsReportedAsLocalOnly(t *testing.T) {
 	path := projectAgentPath(base, "ignored", "shared")
 	mustWriteT(t, path, body)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -365,7 +367,7 @@ func TestRunLink_AgentRequiresProject(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", "canonical shared agent\n")
 	mustMkdirT(t, filepath.Join(base, "proj"))
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--agent", "shared", "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--agent", "shared", "--apply")...)
 	if code != exitFailure {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitFailure, stdout, stderr)
 	}
@@ -379,7 +381,7 @@ func TestRunLink_AgentRequiresProject(t *testing.T) {
 	// The valid form provisions the project it names, and only that one.
 	mustMkdirT(t, filepath.Join(base, "other"))
 	code, stdout, stderr = runCLI(t,
-		linkArgs(repoRoot, base, "--project", "proj", "--agent", "shared", "--apply")...)
+		linkArgs(t, repoRoot, base, "--project", "proj", "--agent", "shared", "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -403,7 +405,7 @@ func TestRunLink_AgentNameCannotEscapeTheProject(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", "canonical shared agent\n")
 	mustMkdirT(t, filepath.Join(base, "Proj", "trav"))
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base,
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base,
 		"--project", "Proj/trav", "--agent", "../../../agents/shared", "--apply")...)
 	if code != exitFailure {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitFailure, stdout, stderr)
@@ -431,7 +433,7 @@ func TestRunLink_TrackedProjectWithAnUnaskableGitIsRefused(t *testing.T) {
 	mustWriteT(t, path, body)
 	mustWriteT(t, filepath.Join(base, "proj", ".git"), "gitdir: /nonexistent-agentsync-test\n")
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitAtRisk {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
 	}
@@ -457,7 +459,7 @@ func TestRunLink_WrongHomeWritesNothing(t *testing.T) {
 	wrongHome := t.TempDir()
 	t.Setenv("HOME", wrongHome)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitFailure {
 		t.Errorf("exit = %d, want %d: a wrong $HOME must stop a write path", code, exitFailure)
 	}
@@ -474,7 +476,7 @@ func TestRunLink_WrongHomeWritesNothing(t *testing.T) {
 
 	// The legitimate case the guard must not break: projects that really do
 	// live outside $HOME, opted in explicitly.
-	code, _, stderr = runCLI(t, linkArgs(repoRoot, base, "--apply", "--allow-outside-home")...)
+	code, _, stderr = runCLI(t, linkArgs(t, repoRoot, base, "--apply", "--allow-outside-home")...)
 	if code != exitOK {
 		t.Fatalf("opted-in exit = %d, want %d\nstderr:\n%s", code, exitOK, stderr)
 	}
@@ -491,7 +493,7 @@ func TestRunLink_JSONReport(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", body)
 	mustWriteT(t, projectAgentPath(base, "proj", "shared"), body)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--json")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--json")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstderr:\n%s", code, exitOK, stderr)
 	}
@@ -541,7 +543,7 @@ func TestRunLink_ApplyRecordsWhatItCreated(t *testing.T) {
 	path := projectAgentPath(base, "proj", "shared")
 	mustWriteT(t, path, body)
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
@@ -576,7 +578,7 @@ func TestRunLink_DryRunRecordsNothing(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", body)
 	mustWriteT(t, projectAgentPath(base, "proj", "shared"), body)
 
-	if code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base)...); code != exitOK {
+	if code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base)...); code != exitOK {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	if _, err := os.Lstat(filepath.Join(repoRoot, ".agentsync-state.json")); err == nil {
@@ -592,7 +594,7 @@ func TestRunLink_DeclinedAgentIsReportedAndNotRecreated(t *testing.T) {
 	mustMkdirT(t, filepath.Join(base, "proj"))
 	declineInState(t, repoRoot, "proj", "shared")
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base,
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base,
 		"--apply", "--project", "proj", "--agent", "shared")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
@@ -616,7 +618,7 @@ func TestRunLink_UndeclineClearsTheMarkerAndLinks(t *testing.T) {
 	mustMkdirT(t, filepath.Join(base, "proj"))
 	declineInState(t, repoRoot, "proj", "shared")
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base,
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base,
 		"--apply", "--project", "proj", "--agent", "shared", "--undecline=proj/shared")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
@@ -642,7 +644,7 @@ func TestRunLink_UndeclineNeedsApply(t *testing.T) {
 	mustMkdirT(t, filepath.Join(base, "proj"))
 	declineInState(t, repoRoot, "proj", "shared")
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base,
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base,
 		"--project", "proj", "--agent", "shared", "--undecline=proj/shared")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -668,7 +670,7 @@ func TestRunLink_UndeclineThatNamesNoMarkerIsReportedNotFailed(t *testing.T) {
 	globalAgent(t, repoRoot, "shared", "canonical shared agent\n")
 	mustMkdirT(t, filepath.Join(base, "proj"))
 
-	code, stdout, stderr := runCLI(t, linkArgs(repoRoot, base,
+	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base,
 		"--apply", "--project", "proj", "--agent", "shared", "--undecline=proj/typo")...)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
@@ -685,7 +687,7 @@ func TestRunLink_UndeclineRefusesAValueThatIsNotAPair(t *testing.T) {
 	base, repoRoot := linkFixture(t)
 	globalAgent(t, repoRoot, "shared", "canonical shared agent\n")
 
-	code, _, stderr := runCLI(t, linkArgs(repoRoot, base, "--undecline", "--apply")...)
+	code, _, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--undecline", "--apply")...)
 	if code != exitFailure {
 		t.Fatalf("exit = %d, want %d; --apply was swallowed as a selector", code, exitFailure)
 	}
@@ -700,7 +702,7 @@ func TestRunLink_RefusesAPositionalArgument(t *testing.T) {
 	base, repoRoot := linkFixture(t)
 	globalAgent(t, repoRoot, "shared", "canonical shared agent\n")
 
-	code, _, stderr := runCLI(t, linkArgs(repoRoot, base, "proj/shared")...)
+	code, _, stderr := runCLI(t, linkArgs(t, repoRoot, base, "proj/shared")...)
 	if code != exitFailure {
 		t.Fatalf("exit = %d, want %d", code, exitFailure)
 	}
@@ -719,7 +721,7 @@ func TestRunLink_AnUnreadableStateFileStopsTheRun(t *testing.T) {
 	mustWriteT(t, path, body)
 	mustWriteT(t, filepath.Join(repoRoot, ".agentsync-state.json"), "{\"schema\":99}\n")
 
-	code, _, stderr := runCLI(t, linkArgs(repoRoot, base, "--apply")...)
+	code, _, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
 	if code != exitFailure {
 		t.Fatalf("exit = %d, want %d", code, exitFailure)
 	}

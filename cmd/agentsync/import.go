@@ -28,8 +28,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerAll(fs)
 	apply := fs.Bool("apply", false, "write the captures; without it this is a dry run")
 	var update updateFlag
 	fs.Var(&update, "update",
@@ -63,18 +62,17 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 	// every differing capture in the run, which is the opposite of what they
 	// typed. Refusing here turns that into a message naming the fix.
 	if rest := fs.Args(); len(rest) > 0 {
-		fmt.Fprintf(stderr, "agentsync: unexpected argument %q; import takes flags only.%s\n",
-			rest[0], updateHint(rest[0]))
+		fmt.Fprintf(stderr, "agentsync: %s\n", strayArg("import", rest[0], updateHint))
 		return exitFailure
 	}
 
-	repo, repoFrom, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo()
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
 	}
 
-	root, err := rootF.resolve(repo.Home)
+	root, err := resolveRoot(repo.Home, *all)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure

@@ -3,7 +3,8 @@
 `agentsync reconcile` acts on the drift [doctor](doctor.md) reports, and only
 where a fact recorded in the [state file](state-file.md) or provable from git
 makes the act safe. It is a dry run without `--apply`, and every operation that
-removes something needs its own flag on top.
+removes something needs its own flag on top. Run it from the project directory;
+`--all` covers the whole default tree instead.
 
 ```bash
 agentsync reconcile                              # report: what it could do and why not

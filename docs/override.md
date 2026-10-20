@@ -12,15 +12,15 @@ agentsync override --agent go-merge-reviewer --effort high --apply
 agentsync override --clear go-merge-reviewer --apply
 ```
 
-Root and repo resolve as for every other command (see
-[configuration](configuration.md)). Without `--apply` it prints the change and
+Run it from the project directory; `--all` is refused. The repo resolves as for
+every other command (see [configuration](configuration.md)). Without `--apply` it prints the change and
 writes nothing.
 
 ## Flags
 
 | Flag | Meaning |
 |---|---|
-| `--agent NAME` | the agent to override, by the `name:` in its frontmatter; it must be in the root's `.claude/agents/` |
+| `--agent NAME` | the agent to override, by the `name:` in its frontmatter; it must be in the project's `.claude/agents/` |
 | `--model M` | `haiku`, `sonnet`, `opus` or `fable` |
 | `--effort E` | `low`, `medium`, `high`, `xhigh` or `max` |
 | `--clear NAME` | remove that agent's override |
@@ -35,7 +35,7 @@ refused: an override belongs to one project.
 ## How it works
 
 The overrides live in one `PreToolUse` hook in
-`<root>/.claude/settings.local.json`:
+`<project>/.claude/settings.local.json`:
 
 ```json
 {"matcher": "Agent", "hooks": [{"type": "command",
@@ -81,7 +81,7 @@ A running Claude Code session may need a restart to pick up a change.
 
 - `0`: listed, changed, or nothing to change.
 - `2`: bad flags, an unknown agent, a model or effort Claude Code does not
-  accept, no repo or root configured, a settings file that cannot be read or
-  edited, or a failed write.
+  accept, no repo configured, no project above the working directory, a
+  settings file that cannot be read or edited, or a failed write.
 
 See [exit codes](exit-codes.md).

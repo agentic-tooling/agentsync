@@ -135,8 +135,7 @@ func runLink(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 
-	rootF := registerRoot(fs)
-	repoPath := fs.String("repo", "", "canonical agent repo")
+	all := registerAll(fs)
 	apply := fs.Bool("apply", false, "create the links; without it this is a dry run")
 	excludeLocal := fs.Bool(linker.ExcludeLocalFlag, false,
 		"add the agents directory to the project's .git/info/exclude before linking")
@@ -170,18 +169,17 @@ func runLink(args []string, stdout, stderr io.Writer) int {
 	// Refused rather than ignored, as import does: an argument that lands here
 	// is one the user believed was doing something.
 	if rest := fs.Args(); len(rest) > 0 {
-		fmt.Fprintf(stderr, "agentsync: unexpected argument %q; link takes flags only.%s\n",
-			rest[0], undeclineHint(rest[0]))
+		fmt.Fprintf(stderr, "agentsync: %s\n", strayArg("link", rest[0], undeclineHint))
 		return exitFailure
 	}
 
-	repo, repoFrom, err := openRepo(*repoPath)
+	repo, repoFrom, err := openRepo()
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
 	}
 
-	root, err := rootF.resolve(repo.Home)
+	root, err := resolveRoot(repo.Home, *all)
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
