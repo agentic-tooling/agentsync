@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -82,6 +83,9 @@ type Row struct {
 	EffortLowConfidence bool    `json:"effort_low_confidence,omitempty"`
 	Reason              string  `json:"reason,omitempty"`
 	Cost                float64 `json:"cost_usd"`
+	// Applied and ApplyError are set only by a run that writes changes.
+	Applied    bool   `json:"applied,omitempty"`
+	ApplyError string `json:"apply_error,omitempty"`
 }
 
 // Report is one run's rows and the spend OpenRouter reported for them.
@@ -352,4 +356,116 @@ func (r Row) Confidence() string {
 		return "-"
 	}
 	return fmt.Sprintf("%s %.2f / %s %.2f", r.ModelPick.Value, r.ModelPick.Probability, r.EffortPick.Value, r.EffortPick.Probability)
+}
+
+// Edit returns content with its top-level model and effort set and every
+// other byte unchanged; an empty value leaves that key alone. A missing key is
+// added just before the closing ---. It refuses frontmatter it would have to
+// guess at, and any result Current does not read back as asked.
+func Edit(content, model, effort string) (string, error) {
+	lines := strings.SplitAfter(content, "\n")
+	eol := "\n"
+	if lines[0] == "---\r\n" {
+		eol = "\r\n"
+	} else if lines[0] != "---\n" {
+		return "", errors.New("the file has no frontmatter to edit")
+	}
+	end := 0
+	for i := 1; i < len(lines) && end == 0; i++ {
+		if strings.HasPrefix(lines[i], "---") {
+			end = i
+		}
+	}
+	if end == 0 || strings.TrimRight(lines[end], "\r\n") != "---" {
+		return "", errors.New("the frontmatter has no closing --- line")
+	}
+	// YAML reads "model :" and "'model':" as the same key, which Frontmatter
+	// does not; editing beside such a spelling would leave a duplicate key.
+	at := map[string]int{}
+	for i := 1; i < end; i++ {
+		k, _, ok := strings.Cut(lines[i], ":")
+		if !ok || k == "" || strings.ContainsAny(k[:1], " \t-#") {
+			continue
+		}
+		name := strings.Trim(strings.TrimRight(k, " \t"), `"'`)
+		if name != "model" && name != "effort" {
+			continue
+		}
+		if k != name {
+			return "", fmt.Errorf("the frontmatter spells %s: as %q; respell it by hand first", name, k+":")
+		}
+		if _, dup := at[name]; dup {
+			return "", fmt.Errorf("the frontmatter sets %s: twice", name)
+		}
+		at[name] = i
+	}
+	for _, kv := range [][2]string{{"model", model}, {"effort", effort}} {
+		key, v := kv[0], kv[1]
+		if v == "" {
+			continue
+		}
+		i, found := at[key]
+		if !found {
+			lines = slices.Insert(lines, end, key+": "+v+eol)
+			end++
+			continue
+		}
+		line, ok := setValue(lines[i], v)
+		if !ok || continued(lines[i+1:end]) {
+			return "", fmt.Errorf("the frontmatter's %s: is not a simple one-line value", key)
+		}
+		lines[i] = line
+	}
+	out := strings.Join(lines, "")
+	if m, e := Current(out); (model != "" && m != model) || (effort != "" && e != effort) {
+		return "", fmt.Errorf("the edited frontmatter reads back as %s / %s", m, e)
+	}
+	return out, nil
+}
+
+// setValue swaps the value on a "key: value" line, keeping the spacing, any
+// quotes and a trailing comment. It refuses a block, flow, anchor, alias or tag
+// value, and a quoted one that is not a single complete quoted string.
+func setValue(line, v string) (string, bool) {
+	text := strings.TrimRight(line, "\r\n")
+	key, rest, _ := strings.Cut(text, ":")
+	body := strings.TrimLeft(rest, " \t")
+	sp := rest[:len(rest)-len(body)]
+	if sp == "" {
+		sp = " "
+	}
+	// The comment is found as Field finds it, so the value read back is the one written.
+	s := " " + body
+	cut := len(s)
+	for _, sep := range []string{" #", "\t#"} {
+		if i := strings.Index(s, sep); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	val := s[1:max(cut, 1)]
+	core := strings.TrimRight(val, " \t")
+	if core != "" && strings.ContainsAny(core[:1], "|>[{&*!") {
+		return "", false
+	}
+	if core != "" && strings.ContainsAny(core[:1], `"'`) {
+		q := core[:1]
+		if len(core) < 2 || !strings.HasSuffix(core, q) || strings.Contains(core[1:len(core)-1], q) {
+			return "", false
+		}
+		v = q + v + q
+	}
+	return key + ":" + sp + v + val[len(core):] + s[cut:] + line[len(text):], true
+}
+
+// continued reports whether the lines after a key carry more of its value: an
+// indented or list line before the next top-level one.
+func continued(next []string) bool {
+	for _, l := range next {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		return strings.ContainsAny(l[:1], " \t-")
+	}
+	return false
 }

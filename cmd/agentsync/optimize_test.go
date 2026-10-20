@@ -34,11 +34,13 @@ func agentFile(name, model, effort string) string {
 
 // fakeOpenRouter serves models (status 200 unless modelsStatus says
 // otherwise) and the decisions in order, and points optimize at itself with
-// testKey set. It counts both kinds of request.
+// testKey set. It counts both kinds of request, and calls onDecide, if set,
+// with each decision request's number before answering it.
 type fakeOpenRouter struct {
 	models       string
 	modelsStatus int
 	decisions    []string
+	onDecide     func(n int)
 	mu           sync.Mutex
 	listed, sent int
 }
@@ -66,6 +68,9 @@ func (f *fakeOpenRouter) start(t *testing.T) {
 			return
 		}
 		f.sent++
+		if f.onDecide != nil {
+			f.onDecide(f.sent)
+		}
 		if f.sent > len(f.decisions) {
 			w.WriteHeader(http.StatusTeapot)
 			return
@@ -162,6 +167,9 @@ func TestOptimize_JSON(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rep.Overrides, []string{"CLAUDE_CODE_SUBAGENT_MODEL"}) {
 		t.Errorf("overrides = %v", rep.Overrides)
+	}
+	if strings.Contains(stdout, `"appl`) {
+		t.Errorf("a dry run's JSON carries apply fields:\n%s", stdout)
 	}
 	for _, w := range []string{"Repo: ", "Root: ", "Note: $CLAUDE_CODE_SUBAGENT_MODEL is set"} {
 		if !strings.Contains(stderr, w) {
@@ -327,5 +335,292 @@ func mustRemoveAll(t *testing.T, p string) {
 	t.Helper()
 	if err := os.RemoveAll(p); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOptimize_DryRunWritesNothing(t *testing.T) {
+	project, repoRoot := optimizeProject(t, map[string]string{"a.md": agentFile("a", "sonnet", "high")})
+	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{orFixture(t, "decision-clef.json")}}).start(t)
+
+	code, stdout, stderr := runCLI(t, "optimize", "--root", project, "--repo", repoRoot)
+	if code != exitOK || !strings.Contains(stdout, "Dry run: nothing written. Run with --apply to write 1 change.\n") {
+		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
+	}
+	if got := readFileT(t, filepath.Join(project, ".claude", "agents", "a.md")); got != agentFile("a", "sonnet", "high") {
+		t.Errorf("a dry run wrote the file:\n%s", got)
+	}
+}
+
+// The canonical file is written through both links, which stay links, and
+// doctor and reconcile report the same tree before and after.
+func TestOptimize_ApplyWritesTheCanonicalTarget(t *testing.T) {
+	home := mustResolveDir(t, t.TempDir())
+	t.Setenv("HOME", home)
+	web := filepath.Join(home, "Web")
+	repoRoot := filepath.Join(web, "agents-repo")
+	mustMkdirT(t, filepath.Join(repoRoot, "project-agents"))
+	target := filepath.Join(repoRoot, "agents", "shared.md")
+	const content = "---\nname: shared\ndescription: d\nmodel: sonnet # pinned\neffort: high\n---\nbody says model: sonnet\n"
+	mustWriteT(t, target, content)
+	for _, p := range []string{"one", "two"} {
+		mustMkdirT(t, filepath.Join(web, p, ".claude"))
+		if code, out, errOut := runCLI(t, "link", "--repo", repoRoot, "--root", web, "--project", "Web/"+p, "--agent", "shared", "--apply"); code != exitOK {
+			t.Fatalf("link %s: exit %d\n%s%s", p, code, out, errOut)
+		}
+	}
+	before := map[string]string{}
+	for _, cmd := range []string{"doctor", "reconcile"} {
+		code, out, errOut := runCLI(t, cmd, "--root", web, "--repo", repoRoot)
+		if code != exitOK {
+			t.Fatalf("%s before the apply: exit %d\n%s%s", cmd, code, out, errOut)
+		}
+		before[cmd] = out
+	}
+	f := &fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{orFixture(t, "decision-clef.json"), orFixture(t, "decision-jev.json"), orFixture(t, "decision-clef.json")}}
+	f.start(t)
+
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", web, "--repo", repoRoot)
+	if code != exitOK {
+		t.Fatalf("exit = %d\n%s%s", code, stdout, stderr)
+	}
+	want := strings.Replace(content, "model: sonnet # pinned", "model: opus # pinned", 1)
+	if got := readFileT(t, target); got != want {
+		t.Errorf("canonical file =\n%s\nwant\n%s", got, want)
+	}
+	for _, p := range []string{"one", "two"} {
+		assertIsLink(t, filepath.Join(web, p, ".claude", "agents", "shared.md"), target)
+	}
+	for _, w := range []string{
+		"wrote ~/Web/agents-repo/agents/shared.md (canonical; linked into 2 projects)\n",
+		"Changed files in ~/Web/agents-repo are not committed; review and commit them there.\n",
+		"Wrote 1 change.\n",
+	} {
+		if !strings.Contains(stdout, w) {
+			t.Errorf("report is missing %q:\n%s", w, stdout)
+		}
+	}
+	for cmd, was := range before {
+		if code, out, _ := runCLI(t, cmd, "--root", web, "--repo", repoRoot); code != exitOK || out != was {
+			t.Errorf("%s changed after the apply: exit %d\n%s\n->\n%s", cmd, code, was, out)
+		}
+	}
+
+	// Without a state file there is no link count to give.
+	mustRemoveAll(t, filepath.Join(repoRoot, ".agentsync-state.json"))
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--root", web, "--repo", repoRoot)
+	if code != exitOK || !strings.Contains(stdout, "wrote ~/Web/agents-repo/agents/shared.md (canonical file)\n") {
+		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
+	}
+	if got := readFileT(t, target); got != strings.Replace(want, "effort: high", "effort: xhigh", 1) {
+		t.Errorf("canonical file =\n%s", got)
+	}
+
+	// An unreadable state file is warned about, not trusted for a count.
+	mustWriteT(t, filepath.Join(repoRoot, ".agentsync-state.json"), "{")
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--min-confidence", "0.5", "--root", web, "--repo", repoRoot)
+	if code != exitOK || !strings.Contains(stdout, "(canonical file)\n") || !strings.Contains(stderr, "warning: link counts not shown") {
+		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
+	}
+}
+
+// Only the confident differing part of a change row is written, in place;
+// keep and unresolved rows are left alone.
+func TestOptimize_ApplyEditsAProjectFileInPlace(t *testing.T) {
+	project, repoRoot := optimizeProject(t, map[string]string{
+		"b.md": agentFile("b", "opus", "high"),
+		"c.md": agentFile("c", "opus", "low"),
+	})
+	dir := filepath.Join(project, ".claude", "agents")
+	// Not the 0600 a temp file is created with, so a lost mode shows.
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte(agentFile("a", "sonnet", "low")), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(filepath.Join(dir, "a.md"))
+	if err != nil || before.Mode().Perm() == 0o600 {
+		t.Fatalf("a.md mode %v, %v", before.Mode(), err)
+	}
+	clef := orFixture(t, "decision-clef.json")
+	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef}}).start(t)
+
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	if code != exitAtRisk {
+		t.Errorf("exit = %d, want %d (c is unresolved)\n%s", code, exitAtRisk, stderr)
+	}
+	for name, want := range map[string]string{
+		"a": agentFile("a", "opus", "low"),
+		"b": agentFile("b", "opus", "high"),
+		"c": agentFile("c", "opus", "low"),
+	} {
+		path := filepath.Join(dir, name+".md")
+		if got := readFileT(t, path); got != want {
+			t.Errorf("%s =\n%s\nwant\n%s", name, got, want)
+		}
+		assertIsRegular(t, path, "an in-place edit keeps a regular file")
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "a.md")); err != nil || fi.Mode().Perm() != before.Mode().Perm() {
+		t.Errorf("a.md mode = %v, %v; want %v kept", fi.Mode(), err, before.Mode())
+	}
+	if !strings.Contains(stdout, "wrote ~/Web/proj/.claude/agents/a.md\n") || !strings.Contains(stdout, "Wrote 1 change.\n") || strings.Contains(stdout, "not committed") {
+		t.Errorf("report:\n%s", stdout)
+	}
+}
+
+// A file changed while the advisor answered, or one Edit refuses, is not
+// written; the other rows still are.
+func TestOptimize_ApplyRefusals(t *testing.T) {
+	block := "---\nname: b\ndescription: d\nmodel: |\n  sonnet\n---\n"
+	project, repoRoot := optimizeProject(t, map[string]string{
+		"a.md": agentFile("a", "sonnet", "high"),
+		"b.md": block,
+		"c.md": agentFile("c", "sonnet", "high"),
+	})
+	dir := filepath.Join(project, ".claude", "agents")
+	edited := agentFile("a", "sonnet", "high") + "edited\n"
+	clef := orFixture(t, "decision-clef.json")
+	f := &fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef, clef}}
+	f.onDecide = func(n int) {
+		if n == 1 {
+			mustWriteT(t, filepath.Join(dir, "a.md"), edited)
+		}
+	}
+	f.start(t)
+
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--json", "--root", project, "--repo", repoRoot)
+	if code != exitAtRisk {
+		t.Errorf("exit = %d, want %d\n%s", code, exitAtRisk, stderr)
+	}
+	var rep optimize.Report
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil || len(rep.Rows) != 3 {
+		t.Fatalf("stdout: %v\n%s", err, stdout)
+	}
+	for i, w := range []string{"changed since it was read; run optimize again", "model: is not a simple one-line value", ""} {
+		r := rep.Rows[i]
+		if !strings.Contains(r.ApplyError, w) || (w == "") != r.Applied || (w == "") != (r.ApplyError == "") {
+			t.Errorf("row %s: applied %v, apply_error %q; want error %q", r.Agent, r.Applied, r.ApplyError, w)
+		}
+	}
+	for name, want := range map[string]string{"a": edited, "b": block, "c": agentFile("c", "opus", "high")} {
+		if got := readFileT(t, filepath.Join(dir, name+".md")); got != want {
+			t.Errorf("%s =\n%s\nwant\n%s", name, got, want)
+		}
+	}
+	if !strings.Contains(stderr, "a: not written: the file changed") || !strings.Contains(stderr, "wrote ~/Web/proj/.claude/agents/c.md\n") {
+		t.Errorf("stderr:\n%s", stderr)
+	}
+}
+
+func TestOptimize_ApplyWriteFailureExitsTwo(t *testing.T) {
+	project, repoRoot := optimizeProject(t, map[string]string{
+		"a.md": agentFile("a", "sonnet", "high"),
+		"b.md": agentFile("b", "sonnet", "high"),
+	})
+	dir := filepath.Join(project, ".claude", "agents")
+	clef := orFixture(t, "decision-clef.json")
+	f := &fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef}}
+	f.onDecide = func(n int) {
+		if n == 1 {
+			mustRemoveAll(t, filepath.Join(dir, "a.md"))
+		}
+	}
+	f.start(t)
+
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	if code != exitFailure {
+		t.Errorf("exit = %d, want %d\n%s", code, exitFailure, stderr)
+	}
+	if got := readFileT(t, filepath.Join(dir, "b.md")); got != agentFile("b", "opus", "high") {
+		t.Errorf("b was not written after a failed:\n%s", got)
+	}
+	if !strings.Contains(stdout, "a: not written: ") || !strings.Contains(stdout, "Wrote 1 change.\n") {
+		t.Errorf("report:\n%s", stdout)
+	}
+}
+
+func TestOptimize_ApplyNotesOverrideStillWins(t *testing.T) {
+	project, repoRoot, settings := overrideFixture(t)
+	mustWriteT(t, settings, oneOverride)
+	clef := orFixture(t, "decision-clef.json")
+	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef, clef, clef}}).start(t)
+
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--agent", "a", "--root", project, "--repo", repoRoot)
+	if code != exitOK {
+		t.Fatalf("exit %d\n%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "wrote ~/Web/proj/.claude/agents/a.md\nNote: Web/proj/a's project override (sonnet / -) still wins over the written frontmatter there.\n") {
+		t.Errorf("no override note after the write:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "b's project override") {
+		t.Errorf("note for b, which was not written:\n%s", stdout)
+	}
+
+	// b's model is written, but its override sets only effort, so nothing is masked.
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	if code != exitOK || !strings.Contains(stdout, "wrote ~/Web/proj/.claude/agents/b.md\n") || strings.Contains(stdout, "still wins") {
+		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
+	}
+
+	// a's effort is written, but its override sets only model.
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--min-confidence", "0.5", "--agent", "a", "--root", project, "--repo", repoRoot)
+	if code != exitOK || !strings.Contains(stdout, "wrote ~/Web/proj/.claude/agents/a.md\n") || strings.Contains(stdout, "still wins") {
+		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
+	}
+}
+
+// Foreign links, read-only files and dereferenced copies of agentsync links
+// are refused. A project-local file is not written while the state file is
+// unreadable, and that is exit 2: the question could not be answered.
+func TestOptimize_ApplyRefusesWhatAgentsyncLeavesAlone(t *testing.T) {
+	project, repoRoot := optimizeProject(t, nil)
+	home := filepath.Dir(filepath.Dir(project))
+	dir := filepath.Join(project, ".claude", "agents")
+	// Linked first: link refuses a project holding files the repo has no copy of.
+	mustWriteT(t, filepath.Join(repoRoot, "agents", "s.md"), agentFile("s", "sonnet", "high"))
+	// A sibling whose path merely starts with the repo's is still outside it.
+	sibling := filepath.Join(repoRoot+"2", "agents", "e.md")
+	mustWriteT(t, sibling, agentFile("e", "sonnet", "high"))
+	if code, out, errOut := runCLI(t, "link", "--repo", repoRoot, "--root", project, "--project", "Web/proj", "--agent", "s", "--apply"); code != exitOK {
+		t.Fatalf("link: exit %d\n%s%s", code, out, errOut)
+	}
+	foreign := filepath.Join(home, "dotfiles", "d.md")
+	mustWriteT(t, foreign, agentFile("d", "sonnet", "high"))
+	for name, target := range map[string]string{"d.md": foreign, "e.md": sibling} {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The write bit is what is checked, so this holds whatever user runs it.
+	if err := os.WriteFile(filepath.Join(dir, "r.md"), []byte(agentFile("r", "sonnet", "high")), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	mustRemoveAll(t, filepath.Join(dir, "s.md"))
+	mustWriteT(t, filepath.Join(dir, "s.md"), agentFile("s", "sonnet", "high"))
+	clef := orFixture(t, "decision-clef.json")
+	(&fakeOpenRouter{models: orFixture(t, "models.json"), decisions: []string{clef, clef, clef, clef, clef, clef, clef, clef}}).start(t)
+
+	code, stdout, stderr := runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	if code != exitAtRisk {
+		t.Errorf("exit = %d, want %d\n%s", code, exitAtRisk, stderr)
+	}
+	for _, w := range []string{
+		"d: not written: it links outside the canonical repo",
+		"e: not written: it links outside the canonical repo",
+		"r: not written: the file is read-only",
+		"s: not written: agentsync recorded a link here that is now a copy; run agentsync link --apply first",
+		"Wrote 0 changes.",
+	} {
+		if !strings.Contains(stdout, w) {
+			t.Errorf("report is missing %q:\n%s", w, stdout)
+		}
+	}
+	for _, p := range []string{foreign, sibling, filepath.Join(dir, "r.md"), filepath.Join(dir, "s.md")} {
+		if got := readFileT(t, p); !strings.Contains(got, "model: sonnet") {
+			t.Errorf("%s was written:\n%s", p, got)
+		}
+	}
+
+	mustWriteT(t, filepath.Join(repoRoot, ".agentsync-state.json"), "{")
+	code, stdout, stderr = runCLI(t, "optimize", "--apply", "--root", project, "--repo", repoRoot)
+	if code != exitFailure || !strings.Contains(stdout, "s: not written: the state file could not be read") || strings.Contains(stderr, "warning") {
+		t.Errorf("exit %d:\n%s%s", code, stdout, stderr)
 	}
 }

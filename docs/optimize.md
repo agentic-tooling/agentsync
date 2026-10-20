@@ -2,7 +2,8 @@
 
 `agentsync optimize` asks an OpenRouter decision model which Claude model and
 reasoning effort each of a project's Claude agents should run on, and reports
-the advice. It writes nothing. It is the only agentsync command that uses the
+the advice. With `--apply` it writes the suggested changes into the agent files
+(see [Applying](#applying)). It is the only agentsync command that uses the
 network.
 
 ```bash
@@ -11,6 +12,7 @@ agentsync optimize                     # the project you are in
 agentsync optimize --agent go-reviewer # one agent
 agentsync optimize --advisor cloudflare/clef --max-cost 0.05
 agentsync optimize --json
+agentsync optimize --apply             # write the suggested changes
 ```
 
 Use a dedicated OpenRouter key with a credit limit set on OpenRouter's side.
@@ -52,6 +54,7 @@ Nothing else from the project is sent.
 | `--max-cost USD` | the most the run may spend; default `0.50` |
 | `--min-confidence P` | the probability a pick needs before it is suggested; default `0.6` |
 | `--agent NAME` | ask only about this agent; repeatable |
+| `--apply` | write each suggested change; without it the run is a dry run |
 | `--json` | print the report as JSON on stdout (see below), with the Repo, Root and override notes on stderr |
 
 ## Reading the report
@@ -88,6 +91,52 @@ something it was not offered. An unresolved row suggests nothing.
 | `model_low_confidence`, `effort_low_confidence` | `true` when that part's differing pick was dropped; omitted otherwise |
 | `reason` | why a row is unresolved or skipped |
 | `cost_usd` | the `usage.cost` OpenRouter reported for this row |
+| `applied` | `true` when `--apply` wrote this row; omitted otherwise |
+| `apply_error` | why `--apply` did not write this `change` row; omitted otherwise |
+
+With `--json`, the lines `--apply` prints go to stderr with the other notes.
+
+## Applying
+
+Without `--apply` nothing is written, and the last line says how many changes
+`--apply` would write. With it, each `change` row is written; `keep`,
+`unresolved` and `skipped` rows, and any part dropped for low confidence, are
+not. There is no prompt: `--apply` is the write boundary, as for `link` and
+`reconcile`.
+
+- Only the suggested parts change. An existing top-level `model:` or `effort:`
+  line keeps its spacing, its quotes and any trailing `# comment`; a missing
+  key is added just before the closing `---`, with the file's line ending.
+  Every other byte, including the body, is unchanged.
+- The file written is the one the agent resolves to. For a linked agent that is
+  the canonical repo file, so every project linked to it gets the change; the
+  link stays a link. The report says `wrote <path> (canonical; linked into N
+  projects)`, counting the link records in `.agentsync-state.json`, or
+  `(canonical file)` when there are none. A project-local agent file is edited
+  in place.
+- agentsync never commits. When a written file is in the canonical repo, the
+  run ends by saying the changes there are not committed.
+- A project [override](override.md) still wins over the written frontmatter in
+  its project, and the run notes each one that sets a part it wrote.
+- Each file is written through a temp file in its own directory and renamed
+  over it, keeping its mode.
+
+A `change` row is refused, and the run exits 1, when:
+
+- the agent is a link to a file outside the canonical repo (a foreign link,
+  which agentsync never touches);
+- it is a regular file where `.agentsync-state.json` records an agentsync link,
+  a dereferenced copy: run `agentsync link --apply` first;
+- the file is read-only (its owner write bit is clear);
+- the file changed since the advice was read: run optimize again;
+- its frontmatter is not simple `key: value` lines: no closing `---`, `model:`
+  or `effort:` set twice or spelled another way (`model :`, `"model":`), or a
+  block, flow, anchor, alias, tag, multi-line or partly quoted value.
+
+A file that cannot be read or written is reported and the run exits 2. So is
+every regular (unlinked) agent file while `.agentsync-state.json` cannot be
+read, since a dereferenced copy cannot be told apart then. Either way the
+other rows are still written.
 
 ## Cost
 
@@ -113,11 +162,12 @@ spend is what OpenRouter reports.
 
 ## Exit codes
 
-- `0`: every agent got advice.
-- `1`: a row is unresolved or skipped.
+- `0`: every agent got advice, and with `--apply` every change was written.
+- `1`: a row is unresolved or skipped, or `--apply` refused a change.
 - `2`: no `$OPENROUTER_API_KEY`, bad flags, no repo or root configured, a scan
   that could not read everything, an agent file that could not be read, or a
   models list that is unreachable, has no fixed price for the advisor, or has
-  no Claude family.
+  no Claude family; or, with `--apply`, an agent file that could not be read or
+  written, or a regular agent file while the state file could not be read.
 
 See [exit codes](exit-codes.md).
