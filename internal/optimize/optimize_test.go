@@ -343,3 +343,73 @@ func TestRow_Display(t *testing.T) {
 		t.Error("the zero row suggests something")
 	}
 }
+
+func TestEdit(t *testing.T) {
+	const body = "body mentions\nmodel: opus\n"
+	for _, tc := range []struct {
+		name, in, model, effort, want, err string
+	}{
+		{name: "replace both", in: "---\nname: a\nmodel: opus\neffort: high\n---\n" + body, model: "sonnet", effort: "low",
+			want: "---\nname: a\nmodel: sonnet\neffort: low\n---\n" + body},
+		{name: "empty leaves a key alone", in: "---\nmodel: opus\neffort: high\n---\n", effort: "max",
+			want: "---\nmodel: opus\neffort: max\n---\n"},
+		{name: "insert both", in: "---\nname: a\n---\n" + body, model: "haiku", effort: "medium",
+			want: "---\nname: a\nmodel: haiku\neffort: medium\n---\n" + body},
+		{name: "insert one beside a replace", in: "---\neffort: high\n---\n", model: "opus", effort: "low",
+			want: "---\neffort: low\nmodel: opus\n---\n"},
+		{name: "quotes and comment kept", in: "---\nmodel:   \"opus\"  # pinned\neffort: 'high'\t# why\n---\n", model: "sonnet", effort: "low",
+			want: "---\nmodel:   \"sonnet\"  # pinned\neffort: 'low'\t# why\n---\n"},
+		{name: "comment-only and empty values", in: "---\nmodel: # todo\neffort:\n---\n", model: "opus", effort: "low",
+			want: "---\nmodel: opus # todo\neffort: low\n---\n"},
+		{name: "CRLF", in: "---\r\nname: a\r\nmodel: opus\r\n---\r\nbody\r\n", model: "sonnet", effort: "high",
+			want: "---\r\nname: a\r\nmodel: sonnet\r\neffort: high\r\n---\r\nbody\r\n"},
+		{name: "closing line at end of file", in: "---\nmodel: opus\n---", model: "haiku", want: "---\nmodel: haiku\n---"},
+		{name: "blank line then next key", in: "---\nmodel: opus\n\nname: a\n---\n", model: "haiku", want: "---\nmodel: haiku\n\nname: a\n---\n"},
+		{name: "nested model line is not the key", in: "---\nx:\n  model: opus\n---\n", model: "haiku", want: "---\nx:\n  model: opus\nmodel: haiku\n---\n"},
+		{name: "no frontmatter", in: "body\nmodel: opus\n", model: "haiku", err: "no frontmatter"},
+		{name: "empty file", in: "", model: "haiku", err: "no frontmatter"},
+		{name: "no closing line", in: "---\nmodel: opus\n", model: "haiku", err: "no closing --- line"},
+		{name: "closing line with more on it", in: "---\nmodel: opus\n--- x\n", model: "haiku", err: "no closing --- line"},
+		{name: "duplicate key", in: "---\neffort: high\neffort: low\n---\n", effort: "max", err: "sets effort: twice"},
+		{name: "block scalar", in: "---\nmodel: |\n  opus\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "flow value", in: "---\nmodel: [opus]\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "indented continuation", in: "---\nmodel:\n\n  opus\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "list continuation", in: "---\neffort:\n- high\n---\n", effort: "low", err: "effort: is not a simple one-line value"},
+		{name: "key-only and nested lines skipped", in: "---\n: x\n  model: opus\n- effort: low\n# model: x\n---\n", model: "haiku",
+			want: "---\n: x\n  model: opus\n- effort: low\n# model: x\nmodel: haiku\n---\n"},
+		{name: "other keys quoted or repeated", in: "---\n\"description\": x\ntools: a\ntools: b\nmodel: opus\n---\n", model: "haiku",
+			want: "---\n\"description\": x\ntools: a\ntools: b\nmodel: haiku\n---\n"},
+		{name: "duplicate of the key not edited", in: "---\nmodel: opus\nmodel: haiku\n---\n", effort: "low", err: "sets model: twice"},
+		{name: "space before colon", in: "---\nmodel : opus\n---\n", model: "haiku", err: `spells model: as "model :"`},
+		{name: "tab before colon", in: "---\nmodel\t: opus\n---\n", model: "haiku", err: `spells model: as "model\t:"`},
+		{name: "double-quoted key", in: "---\n\"model\": opus\n---\n", model: "haiku", err: `spells model: as "\"model\":"`},
+		{name: "single-quoted key of the other part", in: "---\n'effort': high\n---\n", model: "haiku", err: `spells effort: as "'effort':"`},
+		{name: "anchor", in: "---\nmodel: &m opus\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "alias", in: "---\nmodel: *m\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "tag", in: "---\nmodel: !!str opus\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "tab-indented continuation", in: "---\nmodel:\n\topus\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "unclosed quote", in: "---\nmodel: \"opus\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "lone quote", in: "---\nmodel: '\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "text after a quoted value", in: "---\nmodel: \"opus\" x\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "escaped quote inside", in: "---\nmodel: 'it''s'\n---\n", model: "haiku", err: "model: is not a simple one-line value"},
+		{name: "quoted value with a comment", in: "---\nmodel: 'opus' # c\n---\n", model: "haiku", want: "---\nmodel: 'haiku' # c\n---\n"},
+		{name: "value that does not read back", in: "---\nmodel: opus\n---\n", model: "a #b", err: "reads back as a / (not set)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Edit(tc.in, tc.model, tc.effort)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) || got != "" {
+					t.Fatalf("Edit = %q, %v; want error containing %q", got, err, tc.err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("Edit = %q, %v; want %q", got, err, tc.want)
+			}
+			m, e := Current(got)
+			if (tc.model != "" && m != tc.model) || (tc.effort != "" && e != tc.effort) {
+				t.Errorf("Current(edited) = %s / %s", m, e)
+			}
+		})
+	}
+}

@@ -67,7 +67,7 @@ Run without `--apply` first to see what a command would do.
 | `doctor` | report broken, foreign, or mismatched links and stale captures; never writes |
 | `reconcile` | act on that drift, gated on what agentsync itself recorded |
 | `inventory` | regenerate `inventory.json`, a record of every agent on the machine |
-| `optimize` | ask an OpenRouter advisor which model and effort each agent should use; report only |
+| `optimize` | ask an OpenRouter advisor which model and effort each agent should use; `--apply` writes the suggested changes |
 | `override` | set one checkout's model and effort for a Claude agent without forking it |
 
 `agentsync help` lists every flag.

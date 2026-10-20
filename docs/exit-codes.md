@@ -17,7 +17,7 @@ What counts as exit 1, by command:
 | `doctor` | a broken or mismatched link, a stale capture, an orphaned capture directory, an override that cannot run, or a project path the scan could not read (a capture or settings file it could not judge is exit 2) |
 | `reconcile` | a refused selector, a conflict, a diverged or dereferenced link, or a removable link left in place |
 | `inventory --check` | the file is stale or absent |
-| `optimize` | an agent's advice is unresolved, or it was skipped by the cost cap or a stopped run |
+| `optimize` | an agent's advice is unresolved, or it was skipped by the cost cap or a stopped run; with `--apply`, a change was refused (a foreign link, a dereferenced link, a read-only or changed file, or frontmatter that cannot be edited safely) |
 | `override` | never |
 
 One exception: the hidden `agentsync hook claude-agent`, which Claude Code runs

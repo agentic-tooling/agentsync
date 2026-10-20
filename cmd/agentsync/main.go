@@ -37,7 +37,8 @@
 // confirmed, and refuses to replace an existing one without --force.
 //
 // optimize is the only command that uses the network: it asks an OpenRouter
-// advisor about each agent's model and effort, and writes nothing.
+// advisor about each agent's model and effort, and with --apply writes the
+// suggested model: and effort: values into the agent files.
 //
 // override writes only the project's .claude/settings.local.json, with --apply.
 package main
@@ -69,7 +70,7 @@ Usage:
   agentsync reconcile [flags] act on that drift, gated on what this tool recorded
   agentsync inventory [flags] regenerate inventory.json: every agent on this machine
   agentsync optimize [flags]  ask an OpenRouter advisor which model and effort each
-                              agent should use (report only; the one networked command)
+                              agent should use (--apply writes it; the one networked command)
   agentsync override [flags]  set this checkout's model and effort for a Claude agent
   agentsync version
 
@@ -232,13 +233,16 @@ optimize flags:
                     (default 0.50)
   --min-confidence P
                     least probability a pick needs before it is suggested
-                    (default 0.6); below it the row says keep (low confidence)
+                    (default 0.6); a differing pick below it is not suggested
   --agent NAME      ask only about this agent (repeatable)
+  --apply           write each suggested change; without it optimize is a dry run
 
 optimize needs $OPENROUTER_API_KEY and sends each agent file (first 24 KB) to
 OpenRouter, one request per agent with no retries. It reads model: and effort:
-from each agent's frontmatter and writes nothing. Exit 1 when a row is
-unresolved or skipped.
+from each agent's frontmatter. --apply edits only the suggested parts of those
+lines, in the file a link points at: a canonical repo file changes for every
+project linked to it, and agentsync never commits it. Exit 1 when a row is
+unresolved or skipped, or a change was refused; exit 2 when a write failed.
 
 override flags:
   --agent NAME      the agent to override, by its frontmatter name; it must be
@@ -257,7 +261,8 @@ scan and doctor are read-only. import writes only into this repo, only with
 command that writes into a project's .claude/agents, only with --apply, and it
 refuses any project holding a file this repo has no copy of — import that
 first. override writes only the project's .claude/settings.local.json, also
-only with --apply.
+only with --apply. optimize --apply edits only the model: and effort: lines of
+agent files it advised on.
 
 inventory also writes only into this repo, and takes no --apply: its sole
 output is inventory.json, which it owns, recomputes from scratch every run, and
