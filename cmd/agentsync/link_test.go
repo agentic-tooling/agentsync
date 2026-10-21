@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentic-tooling/agentsync/internal/scan"
 	"github.com/agentic-tooling/agentsync/internal/state"
+	"github.com/agentic-tooling/agentsync/internal/testfs"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -624,6 +625,9 @@ func TestRunLink_UndeclineClearsTheMarkerAndLinks(t *testing.T) {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
 	assertIsLink(t, projectAgentPath(base, "proj", "shared"), target)
+	if !strings.Contains(stdout, "1 declined marker was cleared in") || strings.Contains(stdout, "NOT cleared") {
+		t.Errorf("a saved undecline is not reported as cleared:\n%s", stdout)
+	}
 
 	st, err := state.Load(mustRepo(t, repoRoot))
 	if err != nil {
@@ -756,5 +760,124 @@ func declineInState(t *testing.T, repoRoot, project, name string) {
 	}
 	if err := st.Save(repo); err != nil {
 		t.Fatalf("Save: %v", err)
+	}
+}
+
+// unsaveableFixture is linkFixture with the repo placed where its state file's
+// path just fits the platform limit, so Load reads it as absent but Save's
+// longer temporary name cannot be created. Project "p" and agent "a" keep every
+// other repo path inside the limit.
+func unsaveableFixture(t *testing.T) (base, repoRoot string) {
+	t.Helper()
+
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolving the temp dir: %v", err)
+	}
+	repoRoot = testfs.DirWithRoom(t, base, len(string(filepath.Separator)+state.FileName))
+	mustMkdirT(t, filepath.Join(repoRoot, "agents"))
+	mustMkdirT(t, filepath.Join(repoRoot, "project-agents"))
+	t.Setenv("HOME", base)
+	return base, repoRoot
+}
+
+func TestRunLink_StateSaveFailureCountsTheLinkAsNotRecorded(t *testing.T) {
+	base, repoRoot := unsaveableFixture(t)
+	const body = "canonical shared agent\n"
+	target := globalAgent(t, repoRoot, "a", body)
+	path := projectAgentPath(base, "p", "a")
+	mustWriteT(t, path, body)
+	inProject(t, repoRoot, filepath.Join(base, "p"))
+
+	code, stdout, stderr := runCLI(t, "link", "--apply")
+	if code != exitFailure {
+		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitFailure, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "1 link was created but NOT recorded") {
+		t.Errorf("the report does not count the link as unrecorded:\n%s", stdout)
+	}
+	if strings.Contains(stdout, " recorded in ") {
+		t.Errorf("the report claims a record the save never wrote:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, ".agentsync-state-") {
+		t.Errorf("stderr does not report the failed save:\n%s", stderr)
+	}
+	assertIsLink(t, path, target)
+}
+
+func TestRunLink_StateSaveFailureJSONRecordsNothing(t *testing.T) {
+	base, repoRoot := unsaveableFixture(t)
+	const body = "canonical shared agent\n"
+	globalAgent(t, repoRoot, "a", body)
+	mustWriteT(t, projectAgentPath(base, "p", "a"), body)
+	inProject(t, repoRoot, filepath.Join(base, "p"))
+
+	code, stdout, stderr := runCLI(t, "link", "--apply", "--json")
+	if code != exitFailure {
+		t.Fatalf("exit = %d, want %d\nstderr:\n%s", code, exitFailure, stderr)
+	}
+	var rep struct {
+		Recorded []any    `json:"recorded"`
+		Written  []string `json:"written"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("the JSON report does not parse: %v\n%s", err, stdout)
+	}
+	if len(rep.Written) != 1 {
+		t.Errorf("written = %v, want the one link", rep.Written)
+	}
+	if rep.Recorded == nil || len(rep.Recorded) != 0 {
+		t.Errorf("recorded = %v, want [] after a failed save", rep.Recorded)
+	}
+}
+
+func TestRunLink_StateSaveFailureLeavesTheMarkerDeclined(t *testing.T) {
+	base, repoRoot := unsaveableFixture(t)
+	globalAgent(t, repoRoot, "a", "canonical shared agent\n")
+	mustMkdirT(t, filepath.Dir(projectAgentPath(base, "p", "a")))
+	// Written directly: the state file's own path fits, only Save's temporary
+	// name does not.
+	repo := mustRepo(t, repoRoot)
+	st := state.New()
+	key := state.Key{Project: "p", Name: "a"}
+	if err := st.Decline(key, "link gone, nothing in its place", time.Now()); err != nil {
+		t.Fatalf("Decline: %v", err)
+	}
+	b, err := st.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(state.Path(repo), b, 0o600); err != nil {
+		t.Fatalf("writing the state file: %v", err)
+	}
+	inProject(t, repoRoot, filepath.Join(base, "p"))
+	args := []string{"link", "--agent", "a", "--undecline=p/a", "--apply"}
+
+	code, stdout, stderr := runCLI(t, args...)
+	if code != exitFailure {
+		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitFailure, stdout, stderr)
+	}
+	if strings.Contains(stdout, "was cleared") || strings.Contains(stdout, "— cleared") {
+		t.Errorf("the report claims a cleared marker the save never wrote:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "1 declined marker was NOT cleared") {
+		t.Errorf("the report does not say the marker was not cleared:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if got, err := state.Load(repo); err != nil || !got.IsDeclined(key) {
+		t.Errorf("the marker is gone from disk (load error %v)", err)
+	}
+
+	code, stdout, _ = runCLI(t, append(args, "--json")...)
+	if code != exitFailure {
+		t.Fatalf("--json exit = %d, want %d", code, exitFailure)
+	}
+	var rep struct {
+		Undeclined []string `json:"undeclined"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("the JSON report does not parse: %v\n%s", err, stdout)
+	}
+	if rep.Undeclined == nil || len(rep.Undeclined) != 0 {
+		t.Errorf("undeclined = %v, want [] after a failed save", rep.Undeclined)
 	}
 }

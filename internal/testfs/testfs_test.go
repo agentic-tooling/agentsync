@@ -268,7 +268,7 @@ func TestPathLimit_IsDerivedAndExact(t *testing.T) {
 	// probePath must hit its target length exactly, or the binary search
 	// above is measuring something other than what it reports. The one
 	// exception is len(base)+1, which no component can express.
-	for _, n := range []int{len(base) + 2, len(base) + 201, len(base) + 500} {
+	for _, n := range []int{len(base) + 2, len(base) + 201, len(base) + 202, len(base) + 500} {
 		if got := len(probePath(base, n)); got != n {
 			t.Errorf("probePath(base, %d) produced %d bytes; the length search would be off by %d", n, got, got-n)
 		}
@@ -282,5 +282,30 @@ func TestPathLimit_IsDerivedAndExact(t *testing.T) {
 		if len(part) > 255 {
 			t.Fatalf("probePath emitted a %d-byte component; that hits NAME_MAX, not PATH_MAX", len(part))
 		}
+	}
+}
+
+func TestDirWithRoom_LeavesExactlyThatRoom(t *testing.T) {
+	const room = 22
+	dir := DirWithRoom(t, t.TempDir(), room)
+
+	fits := filepath.Join(dir, strings.Repeat("f", room-1))
+	if err := os.WriteFile(fits, nil, 0o644); err != nil {
+		t.Fatalf("a %d-byte name should fit: %v", room-1, err)
+	}
+	err := os.WriteFile(filepath.Join(dir, strings.Repeat("f", room)), nil, 0o644)
+	if !errors.Is(err, syscall.ENAMETOOLONG) {
+		t.Fatalf("a %d-byte name should fail with ENAMETOOLONG, got %v", room, err)
+	}
+
+	// The self-check DirWithRoom relies on must reject a room off by one either
+	// way, and an ordinary directory.
+	for _, r := range []int{room - 1, room + 1} {
+		if hasRoom(dir, r) {
+			t.Errorf("hasRoom accepted %d bytes for a directory with %d", r, room)
+		}
+	}
+	if hasRoom(t.TempDir(), room) {
+		t.Error("hasRoom accepted a short directory")
 	}
 }

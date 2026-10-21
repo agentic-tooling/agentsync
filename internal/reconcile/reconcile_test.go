@@ -635,6 +635,42 @@ func TestApply_AdoptRefusesAChangedTarget(t *testing.T) {
 	}
 }
 
+// TestApply_StateSaveFailureReportsNoStateOnlyChanges: an adopt and a decline
+// exist only in the state document, so a failed save means neither happened.
+func TestApply_StateSaveFailureReportsNoStateOnlyChanges(t *testing.T) {
+	const project = "Web/proj"
+	base, repo := fixture(t)
+
+	adoptTarget := globalAgent(t, repo, "adopt", "one\n")
+	mustLink(t, adoptTarget, agentPath(base, project, "adopt"))
+
+	declineTarget := globalAgent(t, repo, "decline", "two\n")
+	declinePath := agentPath(base, project, "decline")
+	st := state.New()
+	recordCreated(t, st, project, "decline", declinePath, declineTarget, mustHash(t, declineTarget))
+
+	plan := planFor(t, base, repo, st, Options{Adopt: true})
+	if got := itemFor(t, plan, project, "adopt").Op; got != OpAdopt {
+		t.Fatalf("adopt op = %s, want %s", got, OpAdopt)
+	}
+	if got := itemFor(t, plan, project, "decline").Op; got != OpDecline {
+		t.Fatalf("decline op = %s, want %s", got, OpDecline)
+	}
+	// A non-empty directory where the state file goes makes Save's rename fail.
+	mustWrite(t, filepath.Join(state.Path(repo), "kept"), "inside\n")
+
+	done, errs := plan.Apply(repo, st)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), state.FileName) {
+		t.Fatalf("want one error naming %s, got %v", state.FileName, errs)
+	}
+	if len(done.Adopted) != 0 {
+		t.Errorf("adopted = %v, want none after a failed save", done.Adopted)
+	}
+	if len(done.Declined) != 0 {
+		t.Errorf("declined = %v, want none after a failed save", done.Declined)
+	}
+}
+
 // --- dry run ----------------------------------------------------------------
 
 // TestNewPlan_WritesNothing: planning is read-only, whatever the flags say.

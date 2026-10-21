@@ -741,3 +741,54 @@ func TestRunReconcile_AMovedProjectWritesNoMarkers(t *testing.T) {
 		t.Errorf("records = %d, want both kept — dropping them makes the links at the new path unownable", n)
 	}
 }
+
+func TestRunReconcile_StateSaveFailureReportsNoAdoption(t *testing.T) {
+	base, repoRoot := unsaveableFixture(t)
+	target := globalAgent(t, repoRoot, "a", "body\n")
+	path := projectAgentPath(base, "p", "a")
+	mustMkdirT(t, filepath.Dir(path))
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	inProject(t, repoRoot, filepath.Join(base, "p"))
+
+	code, stdout, stderr := runCLI(t, "reconcile", "--"+reconcile.AdoptFlag, "--apply")
+	if code != exitFailure {
+		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitFailure, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Carried out 0 of 1 change.") {
+		t.Errorf("the report counts an adoption the save never wrote:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "recorded as adopted") {
+		t.Errorf("the report claims an adoption the save never wrote:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, ".agentsync-state-") {
+		t.Errorf("stderr does not report the failed save:\n%s", stderr)
+	}
+}
+
+func TestRunReconcile_JSONReportsPruneAdopted(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  bool
+	}{
+		{"with the flag", []string{"--" + reconcile.PruneFlag, "--" + reconcile.PruneAdoptedFlag}, true},
+		{"without it", []string{"--" + reconcile.PruneFlag}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, repoRoot := reconcileFixture(t)
+			code, stdout, stderr := runCLI(t, reconcileArgs(t, repoRoot, base, append(tc.flags, "--json")...)...)
+			if code != exitOK {
+				t.Fatalf("exit = %d, want %d\nstderr:\n%s", code, exitOK, stderr)
+			}
+			var rep map[string]any
+			if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+				t.Fatalf("the JSON report does not parse: %v\n%s", err, stdout)
+			}
+			if got := rep["prune_adopted"]; got != tc.want {
+				t.Errorf("prune_adopted = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -18,7 +18,8 @@ import (
 // The five kinds are reported separately because they are five different
 // promises: a removed link, a marker that changes what link will do in future,
 // a record that makes a link removable at all, a moved directory, and a deleted
-// file.
+// file. Declined and Adopted hold only what was saved, so they are empty after
+// a failed save.
 type Applied struct {
 	Pruned    []Item
 	Declined  []state.Declined
@@ -87,6 +88,10 @@ func (p Plan) Apply(repo *scan.Repo, st *state.File) (Applied, []error) {
 	if st.Dirty() {
 		if err := st.Save(repo); err != nil {
 			errs = append(errs, err)
+			// Only these two exist solely in state; every other kind already
+			// changed the disk, so it stays reported.
+			done.Adopted = done.Adopted[:0]
+			done.Declined = done.Declined[:0]
 		}
 	}
 	return done, errs

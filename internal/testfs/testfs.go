@@ -336,16 +336,15 @@ func pathLimit(base string) int {
 // ENAMETOOLONG for its own reason, so a probe built that way would report the
 // per-component limit and the caller would never learn the total-path one.
 //
-// The one length it cannot represent is len(base)+1: a component costs at least
-// two bytes, the separator and one character. That n overshoots by exactly one,
-// which is the smallest possible miss and harmless to a binary search over a
-// monotone predicate.
+// A component costs at least two bytes, so the loop never leaves exactly one
+// byte over; the only length it cannot hit is len(base)+1, which overshoots by
+// one.
 func probePath(base string, n int) string {
 	b := base
 	for len(b)+1 < n {
-		chunk := n - len(b) - 1
-		if chunk > segmentLen {
-			chunk = segmentLen
+		chunk := min(n-len(b)-1, segmentLen)
+		if n-len(b)-1-chunk == 1 {
+			chunk--
 		}
 		b += "/" + strings.Repeat("p", chunk)
 	}
@@ -417,4 +416,24 @@ func PlantAgent(t testing.TB, inside *os.Root, project, name, content string) {
 	if err := inside.WriteFile(filepath.Join(dir, name+".md"), []byte(content), 0o644); err != nil {
 		t.Fatalf("planting %s: %v", name, err)
 	}
+}
+
+// DirWithRoom creates a directory under parent whose path leaves exactly room
+// bytes before the platform's path limit, so a child name of room-1 bytes still
+// opens and any longer one fails with ENAMETOOLONG, for root too.
+func DirWithRoom(t testing.TB, parent string, room int) string {
+	t.Helper()
+
+	dir := probePath(parent, pathLimit(parent)-room)
+	if err := os.MkdirAll(dir, 0o755); err != nil || !hasRoom(dir, room) {
+		t.Fatalf("could not build a %d-byte directory leaving exactly %d bytes of room (mkdir error: %v)", len(dir), room, err)
+	}
+	return dir
+}
+
+// hasRoom reports whether a child name of room-1 bytes fits under dir and one
+// of room bytes does not.
+func hasRoom(dir string, room int) bool {
+	return !tooLong(filepath.Join(dir, strings.Repeat("f", room-1))) &&
+		tooLong(filepath.Join(dir, strings.Repeat("f", room)))
 }

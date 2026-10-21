@@ -23,8 +23,8 @@ type Applied struct {
 	Links    []Item
 	Excludes []Exclude
 
-	// Recorded is what went into the state document, one entry per link
-	// actually created — the document's own words, so a report cannot
+	// Recorded is what the saved state document holds, one entry per link
+	// actually created. It is empty when the save failed, so a report cannot
 	// describe a record that was never written.
 	Recorded []state.Record
 }
@@ -98,6 +98,7 @@ func (p Plan) Apply(repo *scan.Repo, st *state.File) (Applied, []error) {
 	if st.Dirty() {
 		if err := st.Save(repo); err != nil {
 			errs = append(errs, err)
+			done.Recorded = done.Recorded[:0]
 		}
 	}
 	return done, errs
