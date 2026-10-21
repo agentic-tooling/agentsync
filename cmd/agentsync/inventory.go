@@ -46,7 +46,8 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 	out := fs.String("out", "", "write here instead of <repo>/"+inventoryFileName)
 	toStdout := fs.Bool("stdout", false, "write to stdout and leave the file alone")
 	check := fs.Bool("check", false,
-		"write nothing; exit 1 if the file on disk is not what a regeneration would produce")
+		"write nothing; exit 1 if the file on disk is not what a regeneration would produce, "+
+			"or a path could not be read or classified")
 	allowOutsideHome := fs.Bool(scan.AllowOutsideHomeFlag, false,
 		"projects legitimately live outside $HOME; suppress the home warning")
 
@@ -122,30 +123,50 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 	emitRepoChoice(reportStream(*toStdout, stdout, stderr), repo, repoFrom)
 	emitRootChoice(reportStream(*toStdout, stdout, stderr), repo.Home, root)
 
-	if *toStdout {
-		if _, err := stdout.Write(want); err != nil {
-			fmt.Fprintf(stderr, "agentsync: writing to stdout: %v\n", err)
-			return exitFailure
-		}
-		return exitOK
-	}
-
 	dest := *out
 	if dest == "" {
 		dest = filepath.Join(repo.Root, inventoryFileName)
 	}
+	code, wrote := emitInventory(*toStdout, *check, dest, want, inv, stdout, stderr)
 
-	if *check {
-		return checkInventory(dest, want, stdout, stderr)
+	// Each mode finishes its job first; a skipped path then makes an
+	// otherwise clean run exit 1, since the document is missing what it hides.
+	if n := len(res.Problems); n > 0 {
+		emitProblems(stderr, res.Problems)
+		paths := fmt.Sprintf("%d %s could not be read or classified and %s missing",
+			n, plural(n, "path", "paths"), plural(n, "is", "are"))
+		if wrote {
+			fmt.Fprintf(stderr, "agentsync: inventory written, but %s from it\n", paths)
+		} else {
+			fmt.Fprintf(stderr, "agentsync: %s from the inventory\n", paths)
+		}
+		if code == exitOK {
+			code = exitAtRisk
+		}
 	}
+	return code
+}
 
+// emitInventory runs the selected mode and reports whether dest was written.
+func emitInventory(toStdout, check bool, dest string, want []byte, inv inventory.Inventory,
+	stdout, stderr io.Writer) (code int, wrote bool) {
+	if toStdout {
+		if _, err := stdout.Write(want); err != nil {
+			fmt.Fprintf(stderr, "agentsync: writing to stdout: %v\n", err)
+			return exitFailure, false
+		}
+		return exitOK, false
+	}
+	if check {
+		return checkInventory(dest, want, stdout, stderr), false
+	}
 	if err := writeInventory(dest, want); err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
-		return exitFailure
+		return exitFailure, false
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", dest)
 	emitInventorySummary(stdout, inv)
-	return exitOK
+	return exitOK, true
 }
 
 // checkInventory compares the file on disk against a fresh render.

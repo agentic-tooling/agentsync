@@ -11,11 +11,15 @@ replacing the file with a link loses nothing.
 
 It is built to be safe to run:
 
-- Every command that writes is a dry run until you pass `--apply`.
+- Every command that writes is a dry run until you pass `--apply`, except that
+  `init` in a terminal writes once you confirm, `inventory` rewrites its own
+  derived file, and `reconcile` records a deliberately deleted link in the
+  state file.
 - It refuses to link a project holding a file that is backed up nowhere.
 - It removes a symlink only if it recorded creating it and the link is broken,
   and deletes a captured file only if git still holds its bytes.
-- Anything it cannot determine is a refusal with exit 2, never a guessed default.
+- Anything it cannot determine is a refusal, never a guessed default (see
+  [exit codes](docs/exit-codes.md)).
 
 ## Install
 

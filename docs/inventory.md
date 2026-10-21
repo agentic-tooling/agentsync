@@ -16,12 +16,17 @@ agentsync inventory --out ./inv.json
 |---|---|
 | `--out PATH` | write here instead of `<repo>/inventory.json` |
 | `--stdout` | write the document to stdout and leave the file alone |
-| `--check` | write nothing; exit 1 if the file is not what a regeneration would produce |
+| `--check` | write nothing; exit 1 if the file is not what a regeneration would produce, or a path could not be read or classified |
 
 `inventory` takes no `--apply`. It only ever rewrites its own derived file,
 recomputed from scratch and replaced atomically, so re-running is always safe.
 It never derives its root from the working directory; see
 [configuration](configuration.md).
+
+**Unreadable paths.** A path the scan cannot read or classify is skipped. Every
+mode still does its job over the rest (writes, compares or prints), then lists
+each skipped path and its error on stderr and exits 1, since the document is
+missing whatever that path holds.
 
 ## Derived, never authoritative
 
