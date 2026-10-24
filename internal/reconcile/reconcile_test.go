@@ -783,6 +783,22 @@ func TestNewPlan_DropCaptureGate(t *testing.T) {
 			},
 			wantGuard: GuardCaptureInUse,
 		},
+		{
+			name: "a directory where the capture should be refuses",
+			setup: func(t *testing.T, base string, repo *scan.Repo) {
+				mustMkdir(t, repo.BackupPath(project, "cap"))
+			},
+			wantGuard: GuardNotRegular,
+		},
+		{
+			// A file where the capture's directory belongs makes Lstat fail
+			// with ENOTDIR, which is not "no such capture".
+			name: "a capture that cannot be looked at refuses",
+			setup: func(t *testing.T, base string, repo *scan.Repo) {
+				mustWrite(t, filepath.Dir(repo.BackupPath(project, "cap")), "not a directory\n")
+			},
+			wantGuard: GuardUnreadable,
+		},
 	}
 
 	for _, tc := range cases {
@@ -967,6 +983,23 @@ func TestNewPlan_RekeyGates(t *testing.T) {
 				mustWrite(t, repo.BackupPath(oldKey, "a"), "captured\n")
 			},
 			move: KeyMove{Old: oldKey, New: oldKey + "/below"}, guard: GuardOverlapping,
+		},
+		{
+			name: "a source that cannot be read",
+			setup: func(t *testing.T, base string, repo *scan.Repo) {
+				mustWrite(t, filepath.Join(repo.Root, "project-agents", filepath.FromSlash(oldKey)), "not a directory\n")
+			},
+			move: KeyMove{Old: oldKey, New: newKey}, guard: GuardUnreadable,
+		},
+		{
+			// Dropping this error would read the destination as empty and
+			// authorise the move.
+			name: "a destination that cannot be read",
+			setup: func(t *testing.T, base string, repo *scan.Repo) {
+				mustWrite(t, repo.BackupPath(oldKey, "a"), "captured\n")
+				mustWrite(t, filepath.Join(repo.Root, "project-agents", filepath.FromSlash(newKey)), "not a directory\n")
+			},
+			move: KeyMove{Old: oldKey, New: newKey}, guard: GuardUnreadable,
 		},
 	}
 
