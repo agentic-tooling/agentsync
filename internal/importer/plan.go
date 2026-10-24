@@ -497,8 +497,7 @@ func judgeDest(item Item, opts Options) (verdict, error) {
 // case rather than the default arm is the point: every way the probe can fail
 // to say yes — git missing, a repo git will not talk about under safe.directory,
 // a corrupt object store, no repository at all — then lands on the refusing side
-// without any call site remembering to handle it. That is the discipline issue
-// #12 exists about, applied at the site rather than documented upstream of it.
+// without any call site remembering to handle it.
 func commitGate(dest string) (Refusal, string) {
 	switch scan.CommittedInHEAD(dest) {
 	case scan.CommittedYes:

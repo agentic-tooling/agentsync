@@ -34,11 +34,9 @@ func scanArgs(t *testing.T, repoRoot, root string, extra ...string) []string {
 	return append([]string{"scan", "--" + allFlag}, extra...)
 }
 
-// TestRunScan_ValidButWrongHomeWarns is the issue itself. $HOME is a real,
-// readable, resolvable directory — it is simply not the home these projects
-// live under — so a validity check passes it and, before this change, the scan
-// completed with every key silently re-based under _outside-home/ and nothing
-// on stderr.
+// TestRunScan_ValidButWrongHomeWarns requires a warning when $HOME is valid but
+// is not the home these projects live under. A directory validity check alone
+// would let the scan silently re-base every key under _outside-home/.
 //
 // The exit code must not change: warning is the right severity for a
 // read-only command, and CI keys off these codes.

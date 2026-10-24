@@ -1126,9 +1126,9 @@ func TestBuild_EmptyMachineStillEmitsArrays(t *testing.T) {
 // The top level is exactly these five keys, asserted as a closed set rather
 // than by looking for the fields we do not want.
 //
-// The issue's own sketch named a generated-at timestamp and a tool version, and
-// both were dropped: either one makes every regeneration a diff, which destroys
-// the property --check depends on and the reason this file is worth committing.
+// A generated-at timestamp or tool version would change the output even when
+// the inventory content is unchanged, undermining --check and creating noise
+// in a committed inventory file.
 // Their absence is a contract, so adding a sixth key has to fail here and be
 // argued for, not slip in.
 func TestMarshal_TopLevelIsSchemaAndContentOnly(t *testing.T) {

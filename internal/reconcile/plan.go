@@ -542,8 +542,8 @@ func (p *Plan) refuse(op Op, selector, path string, guard Guard, format string, 
 }
 
 // judgeRecords walks what this tool says it created and compares each record
-// against what is on disk now. It is where the three-row table from issue #13
-// is decided, and where the prune gate is evaluated.
+// against what is on disk now: a symlink, a regular file, or an absent path.
+// It also evaluates the prune gate for recorded links.
 func (p *Plan) judgeRecords(repo *scan.Repo, records []state.Record, opts Options) {
 	for _, rec := range records {
 		item := Item{
@@ -572,15 +572,15 @@ func (p *Plan) judgeRecords(repo *scan.Repo, records []state.Record, opts Option
 	}
 }
 
-// judgeAbsent separates row three of the table from a project that is no longer
-// at this path at all.
+// judgeAbsent distinguishes a deleted link from a project that is no longer
+// at this path.
 //
-// Row three is one link deleted out of a directory that is still there, which
-// is evidence about that agent. A missing agents directory is evidence about
-// the project — an ordinary `mv` produces it — and reading it as row three
+// One link deleted out of a directory that is still there is evidence about
+// that agent. A missing agents directory is evidence about
+// the project — an ordinary `mv` produces it — and treating it as a deleted link
 // writes a declined marker for every agent in the project, suppressing agents
-// nobody declined. That is the false-positive direction #13 names, and the
-// decline is the one write no flag guards.
+// nobody declined. Declines are recorded without an apply flag, so this
+// distinction must hold even in a dry run.
 func (p *Plan) judgeAbsent(item Item, rec state.Record) {
 	dir := filepath.Dir(rec.Path)
 

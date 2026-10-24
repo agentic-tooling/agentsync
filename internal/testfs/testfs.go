@@ -1,12 +1,12 @@
 // Package testfs builds filesystem fixtures the test suites cannot build with
 // permission bits.
 //
-// It exists for one reason, recorded in issue #11: the CI gate runs as root,
-// and root's directory walk is not restricted by permission bits. Five tests
-// covering the same property — an unreadable subtree must never read as a
-// clean result — built their fixture with chmod 000, so all five skipped in CI
-// on `os.Geteuid() == 0`. `go test` without -v prints nothing for a skip, so a
-// green pipeline said "everything passed" when it meant "everything that ran
+// The CI gate runs as root, whose directory walk is not restricted by
+// permission bits. Five tests covering the same property — an unreadable
+// subtree must never read as a clean result — built their fixture with chmod
+// 000, so all five skipped in CI on `os.Geteuid() == 0`. `go test` without -v
+// prints nothing for a skip, so a green pipeline said "everything passed"
+// when it meant "everything that ran
 // passed", and the property those five guard is the exact defect that failed
 // import in review: exit 0 while paths went unread.
 //
@@ -151,7 +151,7 @@ const padMax = 250
 //	way to report one, the scan says "this project has no agent files".
 //
 // It is the exact fixture needed to distinguish an empty agents directory from
-// an unreadable one, which is issue #12's shape with no git in it.
+// an unreadable one: failure to read must never mean "nothing is here".
 //
 // The mechanism is the same as UnreadableSubtree's — path length, not
 // permission, so root is not exempt — but it has to be tuned rather than

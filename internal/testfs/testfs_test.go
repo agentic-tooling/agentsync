@@ -14,7 +14,7 @@ import (
 // TestUnreadableSubtree_IsUnreadableAndStopsTheWalk pins the two claims the
 // fixture makes, because five tests in three packages now rest on them and a
 // fixture that quietly stopped being unreadable would take their assertions
-// with it — the same silent-pass failure mode issue #11 is about.
+// with it, allowing those tests to pass without exercising an unreadable path.
 func TestUnreadableSubtree_IsUnreadableAndStopsTheWalk(t *testing.T) {
 	root := t.TempDir()
 	locked := filepath.Join(root, "locked")
@@ -73,8 +73,8 @@ func TestUnreadableSubtree_IsUnreadableAndStopsTheWalk(t *testing.T) {
 
 // TestNoTestGuardsOnRoot is the recurrence guard.
 //
-// Issue #11 was not one bad test; it was a habit. Five tests reached for
-// chmod 000 because it is the obvious way to make a directory unreadable, and
+// Permission-based unreadability fixtures do not work under root. Five tests
+// reached for chmod 000 to make a directory unreadable, and
 // every one of them then had to skip under root, invisibly, because `go test`
 // prints nothing for a skip. The considered alternative — an env var CI sets
 // that turns a privilege-guarded skip into a failure — makes the gap visible

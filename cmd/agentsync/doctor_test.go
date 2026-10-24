@@ -295,7 +295,7 @@ func TestRunDoctor_ReadmeIsNeverACapture(t *testing.T) {
 // about, so "nothing is wrong" cannot be said about it. Same rule as import and
 // link: an incomplete diagnosis must not exit the way a clean one does.
 //
-// Structural rather than chmod 000 (issue #11), so the CI gate — which runs as
+// Structural rather than chmod 000, so the CI gate — which runs as
 // root, for whom permission bits are advisory — actually runs it. The chmod
 // form skipped there, and a skip prints nothing.
 func TestRunDoctor_UnreadableSubtreeIsNotACleanRun(t *testing.T) {
