@@ -11,12 +11,9 @@ import (
 // Git fixtures that force one arm of the three-way gitYes / gitNo /
 // gitUnavailable answer that internal/scan is built on.
 //
-// Issue #12 is an audit of one bug class: a probe's "no" and its "could not
-// answer" share a return value, and the caller reads the ambiguous value as
-// the definite one. Seven members have now been found in this repo. Every one
-// of them was invisible to the tests, because the tests only ever ran git
-// against repositories that worked — and a probe that conflates "no" with
-// "broken" is indistinguishable from a correct one until something is broken.
+// A probe must distinguish "no" from "could not answer" so callers cannot
+// mistake a failed probe for a definite result. Tests need broken repositories
+// to expose that distinction; healthy repositories exercise only clean answers.
 //
 // The two fixtures the earlier fixes needed were non-obvious enough to be
 // worth not re-deriving, and the third — dubious ownership — is the realistic
@@ -283,9 +280,7 @@ func CorruptPackedRefs(t testing.TB, dir string) {
 // rest of the test, with the same fatal it produces when a checkout is owned
 // by another user.
 //
-// This is the fixture issue #12 singles out as the highest-value one and the
-// realistic trigger for the worst instance of the bug class. It is not exotic:
-// git refuses a repository whose worktree is owned by someone other than the
+// Git refuses a repository whose worktree is owned by someone other than the
 // caller, which is what sudo, cron, a container running as root over a
 // bind-mounted host checkout, and a shared checkout on a build agent all
 // produce. Every probe then exits 128 in a repository that is completely

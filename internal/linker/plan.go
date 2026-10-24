@@ -298,8 +298,7 @@ func (u Unresolved) String() string {
 // The zero value covers every project the scan found and provisions only what
 // is already on disk there. Detection — deciding which agents a project
 // *should* have — is deliberately not part of this package; link provisions
-// what it is told to provision, and the manifest from issue #2 will feed the
-// same Agents field when it exists.
+// what it is told to provision through the Agents field.
 type Options struct {
 	// Projects restricts the run to these project keys, as produced by
 	// scan.ProjectKey. Empty means every project found under the scan root.
@@ -700,9 +699,8 @@ func atRisk(entries []scan.Entry) []scan.Entry {
 
 // Judge maps one classified entry onto the action link takes for it.
 //
-// The mapping is the state table from issue #2 and nothing else: states 3, 4,
-// 6 and 7 are reported and left alone, state 2 is a no-op, and state 5 is the
-// only on-disk state link writes for.
+// States 3, 4, 6 and 7 are reported and left alone, state 2 is a no-op, and
+// state 5 is the only on-disk state link writes for.
 //
 // Exported for doctor, which reports on the same link states. "Is this link
 // healthy, and is it pointing at this project's counterpart?" is one question,
@@ -914,9 +912,8 @@ func deriveDir(repo *scan.Repo, key string) (string, error) {
 	// an ordinary layout. The Lstat rule governs agent *files*, where
 	// following a link is what turns a healthy link into a false adoptable.
 	//
-	// This does fold "not there" together with "could not look" — audited
-	// under issue #12 and kept, because here both answers are the same
-	// answer. Every non-nil error returns, so an unreadable path refuses to
+	// "Not there" and "could not look" both refuse provisioning here.
+	// Every non-nil error returns, so an unreadable path refuses to
 	// provision exactly as a missing one does, and refusing is the safe arm
 	// on a write path. The wording is the only casualty: "no project at X"
 	// is imprecise for a permission error. It is not misleading in the way

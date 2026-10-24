@@ -98,7 +98,7 @@ func (f *fixture) commitRepo() {
 // noGit makes git unexecutable for the rest of the test, which is how the
 // "could not ask" arm is reached without depending on file permissions.
 //
-// Permissions are the wrong lever here: CI runs as root (issue #11), where a
+// Permissions are the wrong lever here: CI runs as root, where a
 // chmod-based fixture stops being unreadable and the test quietly passes
 // without exercising anything. An empty PATH fails the exec itself, identically
 // for every user.
@@ -657,9 +657,8 @@ func TestApply_UpdateRefusesWhenHEADMovedAfterThePlan(t *testing.T) {
 // TestNewPlan_UpdateRefusesWhenGitCannotAnswer is the fail-closed property, and
 // the one most likely to regress.
 //
-// "Not committed" and "git could not be asked" are different facts, and the bug
-// class in issue #12 is exactly a caller reading the second as the first — or,
-// here, as the more permissive third thing. Only scan.CommittedYes may
+// "Not committed" and "git could not be asked" are different facts, but neither
+// permits replacing a capture. Only scan.CommittedYes may
 // authorise replacing a capture; every other answer, including one the probe
 // could not produce at all, refuses.
 //

@@ -216,9 +216,7 @@ func (r *Repo) Counterpart(project, name string) string {
 		filepath.Join(r.Root, "agents", name+".md"),
 	}
 	// This conflates "no counterpart exists" with "the counterpart could not
-	// be stat-ed", and it is left that way deliberately — audited under
-	// issue #12 and recorded here so the next reader does not have to
-	// re-derive it.
+	// be stat-ed" deliberately: either result leaves the entry unprotected.
 	//
 	// Both collapse to "", which routes the entry to StateUnadopted. That
 	// is the loud direction, not the quiet one: StateUnadopted.AtRisk() is
@@ -505,9 +503,8 @@ func FindAgentDirs(root string) ([]string, []ScanProblem, error) {
 // Glob's contract is explicit — "Glob ignores file system errors such as I/O
 // errors reading directories. The only possible returned error is
 // ErrBadPattern" — so an unreadable agents directory produces `nil, nil`,
-// byte-for-byte the answer an empty one produces. That is issue #12's shape
-// with no git in it: one return value carrying both "there is nothing here"
-// and "I could not look".
+// byte-for-byte the answer an empty one produces. A single return value then
+// carries both "there is nothing here" and "I could not look".
 //
 // It defeated the guarantee FindAgentDirs is written to provide a few lines up
 // — "a permission-denied directory must never be indistinguishable from an

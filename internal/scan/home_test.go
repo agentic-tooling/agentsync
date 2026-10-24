@@ -25,8 +25,8 @@ func agentsDirIn(projectDir string) string {
 	return filepath.Join(projectDir, ".claude", "agents")
 }
 
-// TestCheckHome_Statuses is the heart of the issue: /var/root is a valid,
-// readable, resolvable directory, so a validity check passes it and the wrong
+// TestCheckHome_Statuses guards against a valid but wrong home: /var/root is
+// readable and resolvable, so a validity check passes it and the wrong
 // keys go unreported. Only the keys the projects actually get separate a wrong
 // home from a right one.
 func TestCheckHome_Statuses(t *testing.T) {
@@ -130,8 +130,8 @@ func TestCheckHome_Statuses(t *testing.T) {
 //
 // Under `sudo -i` with --root / or --root /Users, home sits UNDER the root, so
 // any root-relative test concludes "fine" — while every project key is
-// silently re-based under _outside-home/. That is precisely the invocation
-// shape the issue is about, and it must warn.
+// silently re-based under _outside-home/. This must warn even though the
+// scan root contains the configured home.
 func TestCheckHome_RootIsNotTheSignal(t *testing.T) {
 	base := resolvePath(t.TempDir())
 	realHome := filepath.Join(base, "home")

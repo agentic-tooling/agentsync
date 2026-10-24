@@ -562,7 +562,7 @@ func TestRunImport_ConflictDoesNotBlockTheOtherProjects(t *testing.T) {
 // else in the tree is not a reason to leave a genuinely unprotected file
 // unprotected.
 //
-// The subtree is made unreadable structurally, not with chmod 000 (issue #11).
+// The subtree is made unreadable structurally, not with chmod 000.
 // The chmod form skipped on the CI gate, which runs as root, and it skipped
 // without printing anything — so the assertion that mattered most was verified
 // on one laptop and nowhere else. testfs.UnreadableSubtree does not care what
@@ -636,8 +636,8 @@ func TestRunImport_UnreadableSubtreeBlocksAnOtherwiseEmptyRun(t *testing.T) {
 
 // --- the home guard ---------------------------------------------------------
 
-// TestRunImport_WrongHomeWritesNothing is the write-path guard from issue #3,
-// and the reason RequireHome exists.
+// TestRunImport_WrongHomeWritesNothing checks that RequireHome blocks writes
+// when the configured home would give the projects incorrect capture keys.
 //
 // $HOME is a real, readable directory that is simply not the one these projects
 // live under — the sudo case. Nothing on disk looks wrong; the run would

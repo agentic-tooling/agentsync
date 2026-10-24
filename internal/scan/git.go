@@ -215,8 +215,8 @@ func probeGitRoot(dir string) gitRoot {
 	// and nothing upstream can catch it. Reading the 128 as "unborn" made
 	// this gitNo, hence TrackedNo, hence CommittedNo, hence import --update
 	// telling the user to commit project-agents/ in a repository whose refs
-	// are unreadable — the same wrong remedy this issue was opened over,
-	// reached by a different route. `git pack-refs --all` is an ordinary
+	// are unreadable, where committing cannot fix the failure.
+	// `git pack-refs --all` is an ordinary
 	// maintenance command and `git gc` runs it automatically, so a packed
 	// refs file is the normal state of any repository that has been alive
 	// for a while, not an exotic one.
@@ -232,12 +232,10 @@ func probeGitRoot(dir string) gitRoot {
 	//	rev-parse --verify --quiet HEAD -> 1
 	//
 	// So a repository whose refs cannot be read still lands on gitNo here
-	// and reports as "nothing is committed". It is pre-existing, it is
-	// identical in InspectDir below, and it is recorded on issue #12 rather
-	// than fixed: the only disambiguator that survives is filesystem
-	// corroboration in the style of hasGitEntry — asking whether refs
-	// actually exist — and that is a larger change than this audit should
-	// make on a path that already fails closed for every other reason.
+	// and reports as "nothing is committed". This remains a limitation here
+	// and in InspectDir below: distinguishing unreadable refs from an unborn
+	// HEAD requires filesystem corroboration in the style of hasGitEntry,
+	// rather than relying on the exit code alone.
 	_, ans, code := runGitCode(top, "rev-parse", "--verify", "--quiet", "HEAD")
 	switch {
 	case ans == gitYes:
@@ -414,9 +412,8 @@ func (c Committed) String() string {
 // The exit codes are read the way the rest of this file reads them: 0 is a yes,
 // a documented 1 is a no, and anything else is git failing rather than
 // answering. Only a clean yes to all three questions returns CommittedYes;
-// every other outcome refuses. That is the discipline issue #12 exists about,
-// and making CommittedUnknown the zero value is what keeps a forgotten case on
-// the refusing side.
+// every other outcome refuses. Making CommittedUnknown the zero value keeps
+// a forgotten case on the refusing side.
 //
 // Moving this into the calling package was rejected: it would duplicate
 // runGitCode's exit-code handling into a second place, which is exactly how
@@ -674,8 +671,8 @@ func InspectDir(dir string) DirGit {
 	// git reports an unreadable refs/heads/ with its documented negative
 	// rather than with 128. A repository whose refs cannot be read therefore
 	// reaches the ignore check as though it had no commits, and lands on
-	// DirVisible or DirIgnored — the permissive side. Pre-existing, recorded
-	// on issue #12, not fixed here.
+	// DirVisible or DirIgnored — the permissive side. Distinguishing these
+	// cases remains an unresolved limitation of this exit-code check.
 	_, ans, code := runGitCode(top, "rev-parse", "--verify", "--quiet", "HEAD")
 	switch {
 	case ans == gitYes:

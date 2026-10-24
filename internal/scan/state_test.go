@@ -311,8 +311,8 @@ func TestFindAgentDirs_UnreadableRootIsFatal(t *testing.T) {
 // TestFindAgentDirs_UnreadableSubtreeIsAProblem guards the distinction between
 // "this subtree is empty" and "this subtree could not be read".
 //
-// The unreadable subtree is built structurally rather than with chmod 000
-// (issue #11). Permission bits do not restrict root's walk, so the chmod form
+// The unreadable subtree is built structurally rather than with chmod 000.
+// Permission bits do not restrict root's walk, so the chmod form
 // of this test skipped on the CI gate, which runs as root — silently, since
 // `go test` prints nothing for a skip. testfs.UnreadableSubtree fails for root
 // exactly as it does for anyone else; see that package for why, and for the
@@ -1221,8 +1221,8 @@ func TestKeyDependsOnHome_MatchesProjectDir(t *testing.T) {
 	}
 }
 
-// TestScan_UnreadableAgentsDirIsNotAnEmptyOne is issue #12's shape with no git
-// in it, and the reason the audit was told to look past git at all.
+// TestScan_UnreadableAgentsDirIsNotAnEmptyOne requires a read failure to be
+// reported as a problem rather than as an empty agents directory.
 //
 // Scan asked filepath.Glob for the *.md files in an agents directory. Glob's
 // contract is explicit that it ignores filesystem errors and can return only

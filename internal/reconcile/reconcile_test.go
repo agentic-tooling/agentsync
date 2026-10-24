@@ -183,9 +183,9 @@ func noErrs(t *testing.T, errs []error) {
 
 // --- the record-against-disk table ------------------------------------------
 
-// TestNewPlan_RecordAgainstDisk is the three-row table from issue #13 plus the
-// link states that surround it. It is the whole of what reconcile decides about
-// a link it has a record for, so every arm is exercised from one fixture shape.
+// TestNewPlan_RecordAgainstDisk covers recorded paths that are now symlinks,
+// regular files, or absent. Every reconciliation outcome for a recorded link
+// is exercised from one fixture shape.
 func TestNewPlan_RecordAgainstDisk(t *testing.T) {
 	const project = "Web/proj"
 

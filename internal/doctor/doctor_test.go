@@ -701,7 +701,7 @@ func TestWalkCaptures_NonRegularCaptureIsAProblem(t *testing.T) {
 // treated as empty — an unreadable directory and an empty one must not produce
 // the same report.
 //
-// Structural rather than chmod 000 (issue #11): the CI gate runs as root, and
+// Structural rather than chmod 000: the CI gate runs as root, and
 // permission bits do not restrict root's walk, so the chmod form of this test
 // skipped in CI and covered nothing there. testfs.UnreadableSubtree fails the
 // same way for every uid.

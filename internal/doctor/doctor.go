@@ -10,7 +10,7 @@
 // That is a decision, not an unfinished feature. Every drift below has an
 // obvious-looking repair — unlink the broken one, repoint the mismatched one,
 // delete the stale capture — and every one of those repairs needs a fact this
-// tool does not have. Issue #2's state file is the missing fact: it records
+// diagnosis alone cannot establish. The state file records
 // every link the tool created and the content hash at link time, which is the
 // only thing that separates "the user deleted this on purpose" from "this went
 // missing", and "this capture is obsolete" from "this capture is the last copy
@@ -18,7 +18,7 @@
 // guesses that look most reasonable — unlinking a broken link and deleting a
 // stale capture — are exactly the two that destroy something unrecoverable.
 //
-// So repair and reconcile are a separate future command, gated on the state
+// Reconciliation belongs to the separate reconcile command, gated on the state
 // file. doctor's whole contract is: find it, name it, explain why it might be
 // there, and leave the judgement to a human. Its exit code is the only thing it
 // asserts.

@@ -17,13 +17,9 @@ func requireGit(t *testing.T) {
 	}
 }
 
-// This file used to carry its own git() and gitOutput(), each building the
-// isolated environment the assertions depend on. They now live in testfs
-// alongside the breakage fixtures, for the reason issue #12 is an audit rather
-// than six fixes: a second copy of a rule drifts from the first, silently, and
-// this bug class is what drift in a git probe looks like. One definition of
-// "a git command under test" means a fixture written next year gets the same
-// isolation and the same self-checks as the ones written today.
+// Git helpers live in testfs alongside the breakage fixtures so every test
+// uses the same isolated environment and fixture self-checks. Keeping that
+// setup in one place prevents git-probe tests from drifting apart.
 
 // initGitRepo makes a repository at dir with no commits yet.
 func initGitRepo(t *testing.T, dir string) {
@@ -497,8 +493,8 @@ func TestCommittedInHEAD_FailsClosed(t *testing.T) {
 
 	t.Run("git unavailable is unknown, never a no", func(t *testing.T) {
 		// The two answers mean different things to a caller: one has a fix
-		// the user can carry out and the other does not. Collapsing them is
-		// the bug class issue #12 tracks.
+		// the user can carry out and the other does not. An unavailable git
+		// command must return unknown rather than claim the file is uncommitted.
 		repo := filepath.Join(t.TempDir(), "project")
 		mustMkdir(t, repo)
 		p := filepath.Join(repo, "agent.md")
@@ -540,8 +536,8 @@ func TestCommittedInHEAD_FailsClosed(t *testing.T) {
 // The recipe is deliberate rather than incidental: `ls-tree` reads only tree
 // objects, so deleting the blob leaves it answering perfectly well, while every
 // question about content has to go to the object that is gone. No permissions
-// and no privilege are involved, so this runs identically for root — the same
-// property issue #11 required of the walk fixtures.
+// and no privilege are involved, so this runs identically for root and
+// non-root users.
 func TestCommittedInHEAD_DamagedObjectStoreIsNeverAYes(t *testing.T) {
 	requireGit(t)
 
@@ -586,8 +582,8 @@ func TestCommittedInHEAD_DamagedObjectStoreIsNeverAYes(t *testing.T) {
 	})
 }
 
-// The regression guards for issue #12's audit: three probes in probeGitRoot and
-// gitProber.tracked that read a non-zero git exit as a clean negative.
+// These regression guards ensure probes in probeGitRoot and gitProber.tracked
+// distinguish failed git commands from clean negative answers.
 //
 // Every one of these passed before the fix, because every one of them was
 // unreachable from a repository that works. That is the property of this bug
@@ -709,8 +705,8 @@ func TestProbeGitRoot_UnbornHeadIsTheOnlyNo(t *testing.T) {
 	// upstream can catch it because --show-toplevel still exits 0. Read as
 	// "unborn" it became TrackedNo, then CommittedNo, then import --update
 	// telling the user to commit project-agents/ in a repository whose refs
-	// git cannot parse — the wrong remedy this issue exists over, reached by
-	// a route the first fix did not cover.
+	// git cannot parse. A corrupt refs file must be reported as a probe failure,
+	// since committing cannot repair it.
 	t.Run("a corrupt packed-refs is not an unborn HEAD", func(t *testing.T) {
 		project := filepath.Join(t.TempDir(), "project")
 		testfs.GitRepo(t, project, "agent.md", "content\n")
