@@ -535,6 +535,9 @@ func TestApply_StateSaveFailureIsReported(t *testing.T) {
 	if len(done.Links) != 1 {
 		t.Errorf("links = %v, want the adoption", done.Links)
 	}
+	if len(done.Recorded) != 0 {
+		t.Errorf("recorded = %v, want none after a failed save", done.Recorded)
+	}
 	assertLink(t, path, filepath.Join(f.repoRoot, "agents", "shared.md"))
 	assertNoTemps(t, f.repoRoot, ".agentsync-state-")
 }

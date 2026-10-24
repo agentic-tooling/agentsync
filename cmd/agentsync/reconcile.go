@@ -325,13 +325,14 @@ func (r reconcileRun) incomplete() bool {
 // reconcileReport is the --json form. It carries the whole plan, not just the
 // writes: what was refused and why is the part a user cannot reconstruct.
 type reconcileReport struct {
-	Apply    bool     `json:"apply"`
-	Repo     string   `json:"repo"`
-	Root     string   `json:"root"`
-	Adopt    bool     `json:"adopt"`
-	Prune    bool     `json:"prune"`
-	Rekey    []string `json:"rekey"`
-	DropKeys []string `json:"drop_capture"`
+	Apply        bool     `json:"apply"`
+	Repo         string   `json:"repo"`
+	Root         string   `json:"root"`
+	Adopt        bool     `json:"adopt"`
+	Prune        bool     `json:"prune"`
+	PruneAdopted bool     `json:"prune_adopted"`
+	Rekey        []string `json:"rekey"`
+	DropKeys     []string `json:"drop_capture"`
 
 	Items    []reconcile.Item    `json:"items"`
 	Counts   map[string]int      `json:"counts"`
@@ -363,13 +364,14 @@ type reconcileReport struct {
 
 func (r reconcileRun) emitJSON(w io.Writer) error {
 	rep := reconcileReport{
-		Apply:    r.apply,
-		Repo:     r.repoRoot,
-		Root:     r.root,
-		Adopt:    r.opts.Adopt,
-		Prune:    r.opts.Prune,
-		Rekey:    moveStrings(r.opts.Rekeys),
-		DropKeys: keyStrings(r.opts.Drops),
+		Apply:        r.apply,
+		Repo:         r.repoRoot,
+		Root:         r.root,
+		Adopt:        r.opts.Adopt,
+		Prune:        r.opts.Prune,
+		PruneAdopted: r.opts.PruneAdopted,
+		Rekey:        moveStrings(r.opts.Rekeys),
+		DropKeys:     keyStrings(r.opts.Drops),
 
 		Items:    r.plan.Items,
 		Counts:   make(map[string]int),

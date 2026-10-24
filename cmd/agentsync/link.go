@@ -257,6 +257,11 @@ func runLink(args []string, stdout, stderr io.Writer) int {
 	}
 	if run.apply {
 		run.done, run.errs = plan.Apply(repo, st)
+		// Save clears Dirty only on success, so a dirty document means the
+		// cleared markers are still on disk.
+		if st.Dirty() {
+			run.cleared, run.uncleared = nil, run.cleared
+		}
 	}
 
 	emitRepoChoice(reportStream(*asJSON, stdout, stderr), repo, repoFrom)
@@ -298,9 +303,11 @@ type linkRun struct {
 	statePath string
 
 	// cleared and unmatched are the --undecline selectors that found a marker
-	// and the ones that did not. Both are reported.
+	// and the ones that did not. Both are reported. uncleared holds the
+	// cleared ones instead when the state document was not saved.
 	cleared   []state.Key
 	unmatched []state.Key
+	uncleared []state.Key
 }
 
 // exitCode maps the run onto the CLI contract.
@@ -587,6 +594,10 @@ func (r linkRun) emitSummary(w io.Writer) {
 			fmt.Fprintf(w, "%d declined marker%s be cleared in %s — nothing was written, since clearing one is a write like any other.\n",
 				n, plural(n, " would", "s would"), r.statePath)
 		}
+	}
+	if n := len(r.uncleared); n > 0 {
+		fmt.Fprintf(w, "%d declined marker%s NOT cleared (see stderr); %s still declined.\n",
+			n, plural(n, " was", "s were"), plural(n, "that agent is", "those agents are"))
 	}
 	if n := len(r.unmatched); n > 0 {
 		fmt.Fprintf(w, "%d --%s selector%s named no declined marker (%s); nothing was declined for %s, which is the state you asked for. If one of those is a typo, the agent it meant is still declined and is listed above.\n",
