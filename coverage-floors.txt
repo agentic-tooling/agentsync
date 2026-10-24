@@ -10,7 +10,7 @@ internal/linker 94.9
 internal/openrouter 100.0
 internal/optimize 100.0
 internal/override 98.3
-internal/reconcile 84.3
+internal/reconcile 91.3
 internal/releasepolicy 96.4
 internal/scan 91.6
 internal/state 89.9
