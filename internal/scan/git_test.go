@@ -1,12 +1,104 @@
 package scan
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/agentic-tooling/agentsync/internal/testfs"
 )
+
+func TestGitStderrDiagnostic(t *testing.T) {
+	t.Run("bounded across writes with split UTF-8", func(t *testing.T) {
+		prefix := strings.Repeat("x", 511)
+		var stderr gitStderr
+		for _, chunk := range []string{prefix, "é" + strings.Repeat("y", 4096), "\nignored"} {
+			if n, err := stderr.Write([]byte(chunk)); n != len(chunk) || err != nil {
+				t.Fatalf("Write consumed %d of %d bytes, error %v", n, len(chunk), err)
+			}
+		}
+		if got := stderr.diagnostic(); got != prefix {
+			t.Errorf("diagnostic length = %d, want exactly 511 ASCII bytes before the split rune", len(got))
+		}
+	})
+
+	for _, tc := range []struct{ name, stderr, want string }{
+		{"control and formatting characters", "  f\x00a\x1bt\u009ba\u202el\u200d: café  \r\nhint: another line", "fatal: café"},
+		{"newline", "fatal: first\nhint: second", "fatal: first"},
+		{"Unicode line separator", "fatal: first\u2028hint: second", "fatal: first"},
+		{"empty first line", "\x1b\t\nhint: second", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr gitStderr
+			if _, err := stderr.Write([]byte(tc.stderr)); err != nil {
+				t.Fatal(err)
+			}
+			if got := stderr.diagnostic(); got != tc.want {
+				t.Errorf("diagnostic = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitProbeDiagnosticsFollowTheVerdict(t *testing.T) {
+	requireGit(t)
+	repo := filepath.Join(t.TempDir(), "project")
+	testfs.GitRepo(t, repo, "agent.md", "committed\n")
+	file := filepath.Join(repo, "agent.md")
+	visible := filepath.Join(repo, "visible")
+	mustMkdir(t, visible)
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := `#!/bin/sh
+if [ "$1" = "$AGENTSYNC_TEST_PROBE" ]; then
+  printf '%s\n' "$1 diagnostic" 'ignored second line' >&2
+  exit "$AGENTSYNC_TEST_PROBE_EXIT"
+fi
+exec "$AGENTSYNC_TEST_REAL_GIT" "$@"
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTSYNC_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, tc := range []struct {
+		name, probe string
+		exit        int
+		want        Committed
+		diagnostic  string
+	}{
+		{"diff failure", "diff", 128, CommittedUnknown, "diff diagnostic"},
+		{"diff negative", "diff", 1, CommittedNo, ""},
+		{"blob failure", "cat-file", 1, CommittedUnknown, "cat-file diagnostic"},
+		{"blob success", "cat-file", 0, CommittedYes, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AGENTSYNC_TEST_PROBE", tc.probe)
+			t.Setenv("AGENTSYNC_TEST_PROBE_EXIT", strconv.Itoa(tc.exit))
+			got, diagnostic := CommittedInHEADWithDiagnostic(file)
+			if got != tc.want || diagnostic != tc.diagnostic {
+				t.Errorf("committed = %v, diagnostic = %q, want %v and %q", got, diagnostic, tc.want, tc.diagnostic)
+			}
+		})
+	}
+
+	t.Run("ignore check failure", func(t *testing.T) {
+		t.Setenv("AGENTSYNC_TEST_PROBE", "check-ignore")
+		t.Setenv("AGENTSYNC_TEST_PROBE_EXIT", "128")
+		got := InspectDir(visible)
+		if got.Tracking != DirUnknown || got.Diagnostic != "check-ignore diagnostic" {
+			t.Errorf("tracking = %v, diagnostic = %q, want unknown and the ignore check diagnostic", got.Tracking, got.Diagnostic)
+		}
+	})
+}
 
 // requireGit skips the test when git is not usable, so the suite still runs in
 // a container without it.
@@ -652,6 +744,9 @@ func TestProbeGitRoot_RefusedRepoIsNotAbsentRepo(t *testing.T) {
 		if got := CommittedInHEAD(file); got != CommittedUnknown {
 			t.Errorf("CommittedInHEAD under dubious ownership = %v, want %v", got, CommittedUnknown)
 		}
+		if _, diagnostic := CommittedInHEADWithDiagnostic(file); !strings.Contains(diagnostic, "dubious ownership") {
+			t.Errorf("root discovery diagnostic = %q, want dubious ownership", diagnostic)
+		}
 	})
 
 	// The other half of the same guard: hasGitEntry must not turn a
@@ -726,6 +821,9 @@ func TestProbeGitRoot_UnbornHeadIsTheOnlyNo(t *testing.T) {
 			t.Errorf("CommittedInHEAD = %v, want %v: %v routes import --update to \"commit project-agents/ first\", which cannot be carried out in a repo whose refs will not parse",
 				got, CommittedUnknown, CommittedNo)
 		}
+		if _, diagnostic := CommittedInHEADWithDiagnostic(file); !strings.Contains(diagnostic, "packed-refs") {
+			t.Errorf("HEAD verification diagnostic = %q, want packed-refs", diagnostic)
+		}
 	})
 
 	// InspectDir asks the identical query, and the two sites are only worth
@@ -742,9 +840,13 @@ func TestProbeGitRoot_UnbornHeadIsTheOnlyNo(t *testing.T) {
 
 		testfs.CorruptPackedRefs(t, project)
 
-		if got := InspectDir(agents).Tracking; got != DirUnknown {
+		got := InspectDir(agents)
+		if got.Tracking != DirUnknown {
 			t.Errorf("InspectDir with an unparseable packed-refs = %v, want %v: falling through to the ignore check would let link write into a directory its own git tracks",
-				got, DirUnknown)
+				got.Tracking, DirUnknown)
+		}
+		if !strings.Contains(got.Diagnostic, "packed-refs") {
+			t.Errorf("directory HEAD verification diagnostic = %q, want packed-refs", got.Diagnostic)
 		}
 	})
 }

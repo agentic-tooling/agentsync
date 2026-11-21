@@ -246,6 +246,9 @@ func TestRunImport_UpdateRefusesAnUncommittedCapture(t *testing.T) {
 			t.Errorf("the report does not mention %q:\n%s", want, stdout)
 		}
 	}
+	if strings.Contains(stdout, "Git reported:") {
+		t.Errorf("an uncommitted capture got a Git diagnostic:\n%s", stdout)
+	}
 
 	// The remedy works.
 	commitRepo(t, repoRoot)
@@ -255,6 +258,48 @@ func TestRunImport_UpdateRefusesAnUncommittedCapture(t *testing.T) {
 	}
 	if got := readFileT(t, dest); got != "the project's current file\n" {
 		t.Errorf("after committing, capture = %q, want the project file", got)
+	}
+}
+
+func TestRunImport_UpdateReportsMissingHEADObject(t *testing.T) {
+	t.Setenv("LC_ALL", "C")
+	base, repoRoot := importFixture(t)
+	src := projectAgent(t, base, "proj", "researcher", "current\n")
+	dest := backupPath(t, repoRoot, "proj", "researcher")
+	mustWriteT(t, dest, "old capture\n")
+	commitRepo(t, repoRoot)
+	testfs.DeleteHeadCommit(t, repoRoot)
+
+	args := importArgs(t, repoRoot, base, "--apply", "--update")
+	for _, jsonOutput := range []bool{false, true} {
+		runArgs := args
+		if jsonOutput {
+			runArgs = append(args, "--json")
+		}
+		code, stdout, stderr := runCLI(t, runArgs...)
+		if code != exitConflict {
+			t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitConflict, stdout, stderr)
+		}
+		reason := stdout
+		if jsonOutput {
+			var report importReport
+			if err := json.Unmarshal([]byte(stdout), &report); err != nil || len(report.Items) != 1 {
+				t.Fatalf("expected one reported capture, got %+v (%v)\n%s", report.Items, err, stdout)
+			}
+			reason = report.Items[0].Reason
+		}
+		if !strings.Contains(reason, "Git reported: fatal: not a tree object") {
+			t.Errorf("the refusal does not name the Git failure:\n%s", reason)
+		}
+		if strings.Contains(reason, "commit project-agents/ first") {
+			t.Errorf("the refusal advises committing to a broken repo:\n%s", reason)
+		}
+		if got := readFileT(t, dest); got != "old capture\n" {
+			t.Errorf("capture was changed to %q", got)
+		}
+		if got := readFileT(t, src); got != "current\n" {
+			t.Errorf("project file was changed to %q", got)
+		}
 	}
 }
 

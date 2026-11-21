@@ -315,7 +315,7 @@ func DubiousOwnership(t testing.TB, dir string) {
 	t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
 
 	// Deliberately NOT run under GitEnv, unlike every other check in this
-	// file. The code under test is scan.runGitCode, which sets no Env and
+	// file. The code under test is scan.runGit, which sets no Env and
 	// therefore inherits the developer's real gitconfig — so the fixture has
 	// to be verified in the same conditions the production probe will meet,
 	// or it could confirm a refusal the probe never sees.

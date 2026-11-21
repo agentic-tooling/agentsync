@@ -607,10 +607,14 @@ func gitGate(project, dir string, excludeLocal bool) gate {
 
 	default:
 		note.Note = "git could not be asked about this directory"
+		reason := "git could not say whether this directory is tracked, and a symlink committed into one breaks every other clone; refusing rather than assuming it is not"
+		if g.Diagnostic != "" {
+			reason += ". Git reported: " + g.Diagnostic
+		}
 		return gate{note: note, blocked: &Blocked{
 			Project: project,
 			Dir:     dir,
-			Reason:  "git could not say whether this directory is tracked, and a symlink committed into one breaks every other clone; refusing rather than assuming it is not",
+			Reason:  reason,
 		}}
 	}
 
@@ -633,11 +637,14 @@ func gitGate(project, dir string, excludeLocal bool) gate {
 
 	if g.GitDir == "" || g.Rel == "" {
 		note.Note = "git did not name this repository's git directory, so no local exclusion could be planned"
+		reason := fmt.Sprintf("--%s was given but git did not name this repository's git directory, so the links could not be made local; refusing rather than linking into a directory git can see", ExcludeLocalFlag)
+		if g.GitDirDiagnostic != "" {
+			reason += ". Git reported: " + g.GitDirDiagnostic
+		}
 		return gate{note: note, blocked: &Blocked{
 			Project: project,
 			Dir:     dir,
-			Reason: fmt.Sprintf("--%s was given but git did not name this repository's git directory, so the links could not be made local; refusing rather than linking into a directory git can see",
-				ExcludeLocalFlag),
+			Reason:  reason,
 		}}
 	}
 
