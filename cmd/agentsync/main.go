@@ -58,15 +58,16 @@ import (
 	"github.com/agentic-tooling/agentsync/internal/config"
 	"github.com/agentic-tooling/agentsync/internal/override"
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/skills"
 )
 
-const usage = `agentsync — inspect project-local Claude agents against the canonical repo
+const usage = `agentsync — inspect project-local Claude agents and skills against the canonical repo
 
 Usage:
   agentsync init [flags]      find your agent repo and write the config file
-  agentsync scan [flags]      classify project agents against the repo (read-only)
-  agentsync import [flags]    capture project-only agents into project-agents/
-  agentsync link [flags]      replace project agent files with symlinks into the repo
+  agentsync scan [flags]      classify project agents and skills (read-only)
+  agentsync import [flags]    capture project-only agents or selected skill directories
+  agentsync link [flags]      provision project agents and selected skills from the repo
   agentsync doctor [flags]    report broken/foreign/mismatched links and stale captures
   agentsync reconcile [flags] act on that drift, gated on what this tool recorded
   agentsync inventory [flags] regenerate inventory.json: every agent on this machine
@@ -103,7 +104,8 @@ you are standing in. --all is accepted there and means what the default already
 means.
 
 Config file: $XDG_CONFIG_HOME/agentsync/config.toml, else
-~/.config/agentsync/config.toml. It may set repo and root; $AGENTSYNC_REPO and
+~/.config/agentsync/config.toml. It may set repo, root and an optional
+checkout-relative skills_root (default skills/). $AGENTSYNC_REPO and
 $AGENTSYNC_ROOT beat the file, and both must be absolute paths. A file that
 exists but is broken refuses. agentsync init writes it, and is the one command
 that takes --repo and --root.
@@ -130,6 +132,8 @@ scan flags:
 
 import flags:
   --apply           write the captures; without it import is a dry run
+  --skill NAME      capture a selected project skill directory into project-skills/
+                    (repeatable); existing skill captures are preserved
   --update=KEY      replace the captured copy of one file, named as the
                     <project>/<name> pair the report prints (repeatable).
                     Attach the value with '='; import takes no positional
@@ -159,13 +163,17 @@ link flags:
                     scan reports, not a directory name)
   --agent NAME      also link this agent into the selected projects even if
                     no file is present (repeatable; requires --project)
-  --exclude-local   add the agents directory to the project's
-                    .git/info/exclude before linking. Without it, a project
+  --skill NAME      link a canonical skill directory into .claude/skills/
+                    (repeatable; requires a current or selected project)
+  --exclude-local   add a rule to the project's .git/info/exclude before linking.
+                    For agents the rule covers the agents directory. Without it, a project
                     whose own git tracks that directory is refused: a symlink
                     into this repo names an absolute path that resolves on
                     this machine only, so committing one breaks every other
                     clone. info/exclude is used rather than .gitignore
                     because .gitignore is tracked and shared.
+                    For skills the rule covers the specific symlink. A skill
+                    path already in the index or HEAD always blocks linking.
   --undecline=KEY   clear the declined marker for one agent, named as the
                     <project>/<name> pair the report prints (repeatable), so
                     it can be linked again. A declined marker records that
@@ -471,23 +479,34 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
+	skillReport, err := scanSkills(repo, res.SkillDirs)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentsync: %v\n", err)
+		return exitFailure
+	}
+
 	// After the scan, because the projects it found are what decides whether
 	// $HOME is the right one — and before the report, so a terminal user
 	// reads the caveat before the numbers it applies to.
-	warnHome(stderr, repo, root.Path, res.Dirs, *allowOutsideHome)
+	warnHome(stderr, repo, root.Path, append(res.Dirs, skillReport.Dirs...), *allowOutsideHome)
 
 	emitRepoChoice(reportStream(*asJSON, stdout, stderr), repo, repoFrom)
 	emitRootChoice(reportStream(*asJSON, stdout, stderr), repo.Home, root)
+	skillRisk := skillReport.AtRisk()
+	if *atRiskOnly {
+		skillReport = skillRisk
+	}
 	if *asJSON {
-		if err := emitJSON(stdout, res, *atRiskOnly); err != nil {
+		if err := emitJSON(stdout, res, *atRiskOnly, skillReport); err != nil {
 			fmt.Fprintf(stderr, "agentsync: %v\n", err)
 			return exitFailure
 		}
 	} else {
 		emitText(stdout, res, repo.Root, root.Path, *atRiskOnly, entryOverrides(res, stderr))
+		emitSkills(stdout, skillReport)
 	}
 
-	if *failOnRisk && (len(res.AtRisk()) > 0 || len(res.Problems) > 0) {
+	if *failOnRisk && (len(res.AtRisk())+len(res.Problems)+len(skillRisk.Entries)+len(skillRisk.Problems) > 0) {
 		return exitAtRisk
 	}
 	return exitOK
@@ -536,14 +555,17 @@ func filterAtRisk(res scan.Result) scan.Result {
 	}
 }
 
-func emitJSON(w io.Writer, res scan.Result, atRiskOnly bool) error {
+func emitJSON(w io.Writer, res scan.Result, atRiskOnly bool, skillReport skills.Report) error {
 	out := res
 	if atRiskOnly {
 		out = filterAtRisk(res)
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return enc.Encode(struct {
+		scan.Result
+		skills.Report
+	}{out, skillReport})
 }
 
 // stateOrder controls report grouping: most urgent first.

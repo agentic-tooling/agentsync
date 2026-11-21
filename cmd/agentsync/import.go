@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentic-tooling/agentsync/internal/importer"
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/skills"
 )
 
 // runImport captures project-only agent files into the repo.
@@ -31,6 +32,8 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 	all := registerAll(fs)
 	apply := fs.Bool("apply", false, "write the captures; without it this is a dry run")
 	var update updateFlag
+	var skillNames stringList
+	fs.Var(&skillNames, skills.Flag, "capture a project skill directory (repeatable)")
 	fs.Var(&update, "update",
 		"replace a captured copy whose content differs; --update=<project>/<name> for one, repeatable")
 	includeTracked := fs.Bool("include-tracked", false,
@@ -76,6 +79,25 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
 		return exitFailure
+	}
+
+	if len(skillNames) > 0 {
+		if err := skills.ValidateNames(skillNames); err != nil {
+			fmt.Fprintf(stderr, "agentsync: %v\n", err)
+			return exitFailure
+		}
+		if update.set.Enabled() {
+			fmt.Fprintln(stderr, "agentsync: --update applies to agent captures; skill captures are write-once")
+			return exitFailure
+		}
+		var keys []string
+		if root.Project != "" {
+			keys = []string{root.Project}
+		}
+		return (skillRun{
+			mode: skills.Import, apply: *apply, allowOutsideHome: *allowOutsideHome,
+			asJSON: *asJSON, failOnPending: *failOnPending, keys: keys, names: skillNames,
+		}).run(repo, repoFrom, root, stdout, stderr)
 	}
 
 	res, err := repo.Scan(root.Path)

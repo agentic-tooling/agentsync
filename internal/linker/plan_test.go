@@ -234,3 +234,19 @@ func TestNewPlan_UnhashableSourceIsAProblemNotAnItem(t *testing.T) {
 		t.Errorf("items = %v, want the file dropped", plan.Items)
 	}
 }
+
+func TestDeriveDirRefusesProjectKeyAliases(t *testing.T) {
+	f := newFixture(t)
+	f.gitInit("actual")
+	alias := filepath.Join(f.repo.Home, "alias")
+	actual := filepath.Join(f.repo.Home, "actual")
+	if err := os.MkdirAll(actual, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(actual, alias); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := deriveDir(f.repo, "alias"); err == nil || !strings.Contains(err.Error(), "keys as") {
+		t.Fatalf("alias resolved a different project: %q, %v", dir, err)
+	}
+}

@@ -428,8 +428,20 @@ var skipDirs = map[string]bool{
 // A hard error is returned only when the walk root itself cannot be read,
 // which makes the whole result meaningless.
 func FindAgentDirs(root string) ([]string, []ScanProblem, error) {
+	agents, _, problems, err := findClaudeDirs(root)
+	return agents, problems, err
+}
+
+// FindSkillDirs finds project skill directories without walking skill trees.
+func FindSkillDirs(root string) ([]string, []ScanProblem, error) {
+	_, skills, problems, err := findClaudeDirs(root)
+	return skills, problems, err
+}
+
+func findClaudeDirs(root string) ([]string, []string, []ScanProblem, error) {
 	var (
 		dirs     []string
+		skills   []string
 		problems []ScanProblem
 	)
 
@@ -445,23 +457,30 @@ func FindAgentDirs(root string) ([]string, []ScanProblem, error) {
 			}
 			return nil
 		}
+		base := d.Name()
+		if filepath.Base(filepath.Dir(path)) == ".claude" && (base == "agents" || base == "skills") {
+			if base == "agents" && d.IsDir() {
+				dirs = append(dirs, path)
+			}
+			if base == "skills" {
+				skills = append(skills, path)
+			}
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+		}
 		if !d.IsDir() {
 			return nil
 		}
-		base := d.Name()
 		if skipDirs[base] {
-			return fs.SkipDir
-		}
-		if base == "agents" && filepath.Base(filepath.Dir(path)) == ".claude" {
-			dirs = append(dirs, path)
 			return fs.SkipDir
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("walking %q: %w", root, err)
+		return nil, nil, nil, fmt.Errorf("walking %q: %w", root, err)
 	}
-	return dirs, problems, nil
+	return dirs, skills, problems, nil
 }
 
 // agentFiles lists the .md files directly inside one agents directory.
@@ -754,8 +773,9 @@ func problem(path string, err error) ScanProblem {
 // Entries, Dirs, and Problems are always non-nil after a Scan, so the JSON form
 // carries empty arrays rather than nulls.
 type Result struct {
-	Entries []Entry  `json:"entries"`
-	Dirs    []string `json:"dirs"`
+	Entries   []Entry  `json:"entries"`
+	Dirs      []string `json:"dirs"`
+	SkillDirs []string `json:"-"`
 
 	// Problems lists paths the scan could not account for. A non-empty
 	// Problems means the report is incomplete: "no at-risk files" is only a
@@ -800,11 +820,12 @@ func (r *Repo) Scan(root string) (Result, error) {
 		Problems: make([]ScanProblem, 0),
 	}
 
-	dirs, problems, err := FindAgentDirs(root)
+	dirs, skillDirs, problems, err := findClaudeDirs(root)
 	if err != nil {
 		return res, err
 	}
 	res.Problems = append(res.Problems, problems...)
+	res.SkillDirs = skillDirs
 
 	for _, dir := range dirs {
 		// Compare ownership on the resolved path. The walk yields paths

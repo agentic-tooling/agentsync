@@ -13,6 +13,7 @@ internal/override 98.3
 internal/reconcile 91.3
 internal/releasepolicy 96.4
 internal/scan 91.6
+internal/skills 84.0
 internal/state 89.9
 internal/testfs 77.1
 scripts/release-policy 90.7

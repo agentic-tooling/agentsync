@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentic-tooling/agentsync/internal/linker"
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/skills"
 	"github.com/agentic-tooling/agentsync/internal/state"
 )
 
@@ -143,8 +144,9 @@ func runLink(args []string, stdout, stderr io.Writer) int {
 	allowOutsideHome := fs.Bool(scan.AllowOutsideHomeFlag, false,
 		"projects legitimately live outside $HOME; permit the write anyway")
 
-	var projects, agents stringList
+	var projects, agents, skillNames stringList
 	fs.Var(&projects, linker.ProjectFlag, "restrict to this project key (repeatable)")
+	fs.Var(&skillNames, skills.Flag, "link a project skill directory (repeatable)")
 	fs.Var(&agents, linker.AgentFlag,
 		"also link this agent into the selected projects even if absent (repeatable; requires --"+linker.ProjectFlag+")")
 
@@ -196,6 +198,18 @@ func runLink(args []string, stdout, stderr io.Writer) int {
 	// root is the default tree and nobody named one.
 	if len(opts.Projects) == 0 && root.Project != "" {
 		opts.Projects = []string{root.Project}
+	}
+	if err := skills.ValidateNames(skillNames); err != nil {
+		fmt.Fprintf(stderr, "agentsync: %v\n", err)
+		return exitFailure
+	}
+	skill := skillRun{
+		mode: skills.Link, apply: *apply, excludeLocal: *excludeLocal,
+		allowOutsideHome: *allowOutsideHome, asJSON: *asJSON,
+		keys: opts.Projects, names: skillNames,
+	}
+	if len(skillNames) > 0 && len(agents)+len(undecline.keys) == 0 {
+		return skill.run(repo, repoFrom, root, stdout, stderr)
 	}
 	if err := opts.Validate(); err != nil {
 		fmt.Fprintf(stderr, "agentsync: %v\n", err)
@@ -255,12 +269,24 @@ func runLink(args []string, stdout, stderr io.Writer) int {
 		cleared:   cleared,
 		unmatched: unmatched,
 	}
+	var catalog *skills.Catalog
+	if len(skillNames) > 0 {
+		catalog, run.skills, _, err = skill.prepare(repo, root)
+		if err != nil {
+			fmt.Fprintf(stderr, "agentsync: %v\n", err)
+			return exitFailure
+		}
+		defer func() { _ = catalog.Close() }()
+	}
 	if run.apply {
 		run.done, run.errs = plan.Apply(repo, st)
 		// Save clears Dirty only on success, so a dirty document means the
 		// cleared markers are still on disk.
 		if st.Dirty() {
 			run.cleared, run.uncleared = nil, run.cleared
+		}
+		if catalog != nil {
+			catalog.Apply(run.skills, *excludeLocal)
 		}
 	}
 
@@ -281,8 +307,10 @@ func runLink(args []string, stdout, stderr io.Writer) int {
 	// really appeared. Excludes and state records change nothing a session
 	// loads, so neither earns this line.
 	emitRestartNotice(reportStream(*asJSON, stdout, stderr), len(run.done.Links) > 0)
+	_, written, blocked, failed := run.skills.Counts()
+	emitSkillRestart(reportStream(*asJSON, stdout, stderr), written)
 
-	return run.exitCode()
+	return max(run.exitCode(), skillExitCode(0, blocked, failed, false))
 }
 
 // linkRun is one invocation: what was planned, what was written, and what went
@@ -297,6 +325,7 @@ type linkRun struct {
 	plan     linker.Plan
 	done     linker.Applied
 	errs     []error
+	skills   skills.Plan
 
 	// statePath is where the run's records go, named in the report because
 	// people go and look at this file by hand.
@@ -352,6 +381,7 @@ func (r linkRun) linkCaveat() string {
 // linkReport is the --json form. It reports the whole plan, not just the
 // writes: what was refused and why is the part a user cannot reconstruct.
 type linkReport struct {
+	SkillActions skills.Plan         `json:"skill_actions,omitempty"`
 	Apply        bool                `json:"apply"`
 	ExcludeLocal bool                `json:"exclude_local"`
 	Repo         string              `json:"repo"`
@@ -388,6 +418,7 @@ type linkReport struct {
 
 func (r linkRun) emitJSON(w io.Writer) error {
 	rep := linkReport{
+		SkillActions: r.skills,
 		Apply:        r.apply,
 		ExcludeLocal: r.opts.ExcludeLocal,
 		Repo:         r.repoRoot,
@@ -530,6 +561,9 @@ func (r linkRun) emitText(w io.Writer) {
 
 	fmt.Fprintln(w, strings.Repeat("-", 60))
 	r.emitSummary(w)
+	if len(r.skills) > 0 {
+		emitSkillActions(w, r.skills, r.apply)
+	}
 }
 
 func (r linkRun) emitSummary(w io.Writer) {

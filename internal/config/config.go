@@ -18,8 +18,9 @@ import (
 // Config holds the settings the file may carry. An empty field means the key
 // was absent: Load refuses a key that is present but empty.
 type Config struct {
-	Repo string `toml:"repo"`
-	Root string `toml:"root"`
+	Repo       string `toml:"repo"`
+	Root       string `toml:"root"`
+	SkillsRoot string `toml:"skills_root,omitempty"`
 }
 
 // Path is where the config file lives: under $XDG_CONFIG_HOME when that is
@@ -39,16 +40,9 @@ func Path() (string, error) {
 // Load reads the file at path. A missing file is an empty Config, not an
 // error; every other problem with it is an error naming the file.
 func Load(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		// A link whose target is gone is a broken config, not an absent one.
-		if _, lerr := os.Lstat(path); lerr == nil {
-			return Config{}, fmt.Errorf("config file %s is a dangling symlink; fix or remove the link", path)
-		}
-		return Config{}, nil
-	}
+	data, err := readFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("config file %s: %w", path, err)
+		return Config{}, err
 	}
 
 	var c Config
@@ -57,7 +51,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config file %s: %w", path, err)
 	}
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		return Config{}, fmt.Errorf("config file %s: unknown key %q (known keys: repo, root)", path, undecoded[0].String())
+		return Config{}, fmt.Errorf("config file %s: unknown key %q (known keys: repo, root, skills_root)", path, undecoded[0].String())
 	}
 
 	for _, f := range []struct {
@@ -73,7 +67,73 @@ func Load(path string) (Config, error) {
 		}
 		*f.val = v
 	}
+	if md.IsDefined("skills_root") {
+		c.SkillsRoot, err = parseSkillsRoot(c.SkillsRoot)
+		if err != nil {
+			return Config{}, fmt.Errorf("config file %s: %w", path, err)
+		}
+	}
 	return c, nil
+}
+
+func readFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if _, lerr := os.Lstat(path); lerr == nil {
+			return nil, fmt.Errorf("config file %s is a dangling symlink; fix or remove the link", path)
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("config file %s: %w", path, err)
+	}
+	return data, nil
+}
+
+func parseSkillsRoot(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if !filepath.IsLocal(value) || filepath.Clean(value) == "." || strings.HasPrefix(value, "~") ||
+		strings.ContainsAny(value, "\\:\x00") || strings.Contains("/"+value+"/", "/../") {
+		return "", fmt.Errorf("skills_root must be a relative directory inside the canonical checkout, got %q", raw)
+	}
+	return filepath.Clean(value), nil
+}
+
+// SkillsRoot reads the setting independently of repo and root. A command
+// acting on skills must distinguish an omitted setting from a broken file.
+func SkillsRoot(strict bool) (string, error) {
+	path, err := Path()
+	if err != nil {
+		return "", optionalConfigError(err, strict)
+	}
+	data, err := readFile(path)
+	if err != nil {
+		return "", optionalConfigError(err, strict)
+	}
+	var fields map[string]any
+	if _, err := toml.Decode(string(data), &fields); err != nil {
+		return "", optionalConfigError(fmt.Errorf("config file %s: %w", path, err), strict)
+	}
+	raw, exists := fields["skills_root"]
+	if !exists {
+		return "", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("config file %s: skills_root must be a string", path)
+	}
+	root, err := parseSkillsRoot(value)
+	if err != nil {
+		return "", fmt.Errorf("config file %s: %w", path, err)
+	}
+	return root, nil
+}
+
+func optionalConfigError(err error, strict bool) error {
+	if strict {
+		return err
+	}
+	return nil
 }
 
 // ParsePath checks one setting's value by the file's rules and returns it
@@ -104,6 +164,11 @@ func Render(c Config) ([]byte, error) {
 	}
 	if c.Root, err = portable("root", c.Root); err != nil {
 		return nil, err
+	}
+	if c.SkillsRoot != "" {
+		if c.SkillsRoot, err = parseSkillsRoot(c.SkillsRoot); err != nil {
+			return nil, err
+		}
 	}
 	var buf bytes.Buffer
 	err = toml.NewEncoder(&buf).Encode(c)

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/skills"
 	"github.com/agentic-tooling/agentsync/internal/testfs"
 )
 
@@ -92,7 +93,7 @@ func renderText(t *testing.T, res scan.Result, atRiskOnly bool) string {
 func renderJSON(t *testing.T, res scan.Result, atRiskOnly bool) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := emitJSON(&buf, res, atRiskOnly); err != nil {
+	if err := emitJSON(&buf, res, atRiskOnly, skills.Report{}); err != nil {
 		t.Fatalf("emitJSON: %v", err)
 	}
 	return buf.String()

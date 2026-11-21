@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentic-tooling/agentsync/internal/scan"
 	"github.com/agentic-tooling/agentsync/internal/state"
+	"golang.org/x/sys/unix"
 )
 
 // Applied is what an Apply actually did. link has three kinds of write — the
@@ -68,7 +69,7 @@ func (p Plan) Apply(repo *scan.Repo, st *state.File) (Applied, []error) {
 
 	unexcluded := make(map[string]bool, len(p.Excludes))
 	for _, ex := range p.Excludes {
-		if err := writeExclude(ex); err != nil {
+		if err := WriteExclude(ex.File, ex.Pattern); err != nil {
 			errs = append(errs, err)
 			unexcluded[ex.Project] = true
 			continue
@@ -141,31 +142,30 @@ func record(st *state.File, links []Item, into *[]state.Record) []error {
 	return errs
 }
 
-// writeExclude appends the plan's pattern to a project's .git/info/exclude.
-//
-// info/exclude, not .gitignore: .gitignore is tracked and shared, so a rule
-// written there is a decision committed on behalf of everyone who clones the
-// project. info/exclude is local to this clone and does the same job for the
-// person running this command. See the Exclude doc comment.
-//
-// The file is rewritten whole through a temporary and a rename rather than
-// opened for append. An append that fails halfway leaves a partial line, and a
-// partial line in an exclude file is a pattern nobody wrote — which could match
-// paths nobody meant to hide.
-func writeExclude(ex Exclude) error {
-	dir := filepath.Dir(ex.File)
+// WriteExclude adds a rule once to a project's .git/info/exclude. It
+// replaces the file atomically so a failed append cannot leave a partial rule.
+func WriteExclude(file, pattern string) error {
+	dir := filepath.Dir(file)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating %q: %w", dir, err)
 	}
+	lock, err := os.Open(dir)
+	if err == nil {
+		defer func() { _ = lock.Close() }()
+		err = unix.Flock(int(lock.Fd()), unix.LOCK_EX)
+	}
+	if err != nil {
+		return fmt.Errorf("locking %q for exclusion update: %w", dir, err)
+	}
 
-	existing, err := os.ReadFile(ex.File)
+	existing, err := os.ReadFile(file)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("reading %q: %w", ex.File, err)
+		return fmt.Errorf("reading %q: %w", file, err)
 	}
 	// Re-checked here rather than trusted from the plan, so a concurrent run
 	// or a hand edit between the two phases cannot produce a duplicate line.
 	for line := range strings.SplitSeq(string(existing), "\n") {
-		if strings.TrimSpace(line) == ex.Pattern {
+		if strings.TrimSpace(line) == pattern {
 			return nil
 		}
 	}
@@ -178,10 +178,10 @@ func writeExclude(ex Exclude) error {
 	// The comment survives in someone else's repository, so it says who wrote
 	// the line and why rather than leaving an unexplained pattern behind.
 	buf.WriteString("# agentsync: symlinks here point at an absolute path on this machine\n")
-	buf.WriteString(ex.Pattern + "\n")
+	buf.WriteString(pattern + "\n")
 
-	if err := writeAtomic(ex.File, buf.String()); err != nil {
-		return fmt.Errorf("excluding %s in %q: %w", ex.Pattern, ex.File, err)
+	if err := writeAtomic(file, buf.String()); err != nil {
+		return fmt.Errorf("excluding %s in %q: %w", pattern, file, err)
 	}
 	return nil
 }

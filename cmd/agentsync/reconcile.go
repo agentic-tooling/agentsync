@@ -12,6 +12,7 @@ import (
 	"github.com/agentic-tooling/agentsync/internal/doctor"
 	"github.com/agentic-tooling/agentsync/internal/reconcile"
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/skills"
 	"github.com/agentic-tooling/agentsync/internal/state"
 )
 
@@ -189,6 +190,11 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
+	skillReport, err := scanSkills(repo, res.SkillDirs)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentsync: %v\n", err)
+		return exitFailure
+	}
 	diag := doctor.Diagnose(repo, res)
 	plan, err := reconcile.NewPlan(repo, res, diag, st, opts)
 	if err != nil {
@@ -214,7 +220,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 			return exitFailure
 		}
 	} else {
-		warnHome(stderr, repo, root.Path, plan.Dirs, *allowOutsideHome)
+		warnHome(stderr, repo, root.Path, append(plan.Dirs, skillReport.Dirs...), *allowOutsideHome)
 	}
 	// doctor's second home check, for the reason doctor prints it: the re-key
 	// candidates below are derived from orphaned capture directories, which is
@@ -234,6 +240,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) int {
 		apply:     *apply,
 		plan:      plan,
 		statePath: state.Path(repo),
+		skills:    skillReport,
 	}
 	if run.apply {
 		run.done, run.errs = plan.Apply(repo, st)
@@ -287,6 +294,7 @@ type reconcileRun struct {
 	plan     reconcile.Plan
 	done     reconcile.Applied
 	errs     []error
+	skills   skills.Report
 
 	// statePath is the document every gate here reads, named in the report
 	// because people go and look at this file by hand.
@@ -307,10 +315,10 @@ type reconcileRun struct {
 // it would make the code un-clearable. The summary says so and points at
 // doctor, whose exit code does assert it.
 func (r reconcileRun) exitCode() int {
-	if len(r.errs) > 0 || len(r.plan.Problems) > 0 {
+	if len(r.errs)+len(r.plan.Problems)+len(r.skills.Problems) > 0 {
 		return exitFailure
 	}
-	if len(r.plan.Refused) > 0 || len(r.plan.Unresolved()) > 0 || len(r.res.Problems) > 0 {
+	if len(r.plan.Refused)+len(r.plan.Unresolved())+len(r.res.Problems)+len(r.skills.AtRisk().Entries) > 0 {
 		return exitAtRisk
 	}
 	return exitOK
@@ -319,12 +327,13 @@ func (r reconcileRun) exitCode() int {
 // incomplete reports whether the scan failed to look at part of the tree, which
 // disqualifies the summary from claiming anything about what it did not read.
 func (r reconcileRun) incomplete() bool {
-	return len(r.res.Problems) > 0 || len(r.plan.Problems) > 0
+	return len(r.res.Problems)+len(r.plan.Problems)+len(r.skills.Problems) > 0
 }
 
 // reconcileReport is the --json form. It carries the whole plan, not just the
 // writes: what was refused and why is the part a user cannot reconstruct.
 type reconcileReport struct {
+	skills.Report
 	Apply        bool     `json:"apply"`
 	Repo         string   `json:"repo"`
 	Root         string   `json:"root"`
@@ -364,6 +373,7 @@ type reconcileReport struct {
 
 func (r reconcileRun) emitJSON(w io.Writer) error {
 	rep := reconcileReport{
+		Report:       r.skills,
 		Apply:        r.apply,
 		Repo:         r.repoRoot,
 		Root:         r.root,
@@ -515,6 +525,7 @@ func (r reconcileRun) emitText(w io.Writer) {
 	}
 
 	emitDoctorProblems(w, r.plan.Problems, r.res.Problems)
+	emitSkills(w, r.skills)
 
 	fmt.Fprintln(w, strings.Repeat("-", 60))
 	r.emitSummary(w)
@@ -583,6 +594,9 @@ func (r reconcileRun) emitSummary(w io.Writer) {
 	if n := len(r.diag.NeedsHuman()); n > 0 {
 		fmt.Fprintf(w, "doctor's diagnosis of this same tree holds %d finding%s reconcile has no flag for — stale captures above all. They do NOT move this exit code: `agentsync doctor` is where that assertion lives.\n",
 			n, plural(n, "", "s"))
+	}
+	if len(r.skills.AtRisk().Entries) > 0 {
+		fmt.Fprintln(w, "Resolve the project skill findings manually. Reconcile reports skill directories without changing them.")
 	}
 	if n := len(r.plan.Problems); n > 0 {
 		fmt.Fprintf(w, "%d path%s could not be judged and %s left untouched.\n",
