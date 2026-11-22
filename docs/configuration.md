@@ -11,15 +11,19 @@ The usual place to set them is `config.toml`, which
 ```toml
 repo = "~/src/my-agents"
 root = "~/src"
+# Optional, relative to the canonical checkout
+skills_root = "skills"
 ```
 
 It lives at `$XDG_CONFIG_HOME/agentsync/config.toml`, or at
 `~/.config/agentsync/config.toml` when `$XDG_CONFIG_HOME` is unset or not an
 absolute path. That holds on macOS too.
 
-`repo` and `root` are the only keys. Each must be an absolute path, `~`, or start
+`repo` and `root` must each be an absolute path, `~`, or start
 with `~/`; `~` expands against `$HOME`. A missing file
 is not an error, but a symlink there whose target is missing is a broken file.
+`skills_root` defaults to `skills/` in the canonical checkout. A configured
+directory and its resolved path must stay within that checkout.
 
 ## Environment
 
@@ -48,9 +52,11 @@ and the root from the file. An empty or blank variable counts as unset.
 | 2 | config file |
 | 3 | refuse with exit 2 |
 
-The file is read only when a setting is still unset after the environment. A
-broken file therefore never blocks a run that sets both variables, which is how
-you work around it while fixing it.
+Repo and root resolution reads the file only for settings left unset by the
+environment. Commands that inspect or provision skills also look up
+`skills_root` in the file. A skill link, capture, or scan of skill directories
+refuses a malformed or unreadable file, even when the environment supplies
+the repo and root.
 
 Every run that reports prints a `Repo:` line and a `Root:` line naming where
 each value came from, including the config file's path.
@@ -63,9 +69,10 @@ file:
 - it exists but cannot be read, is a directory, or is a dangling symlink;
 - it does not parse as TOML (the message gives the line), or a value has the
   wrong type, such as `repo = 5`;
-- it holds a key other than `repo` or `root` (the message names the key);
+- it holds a key other than `repo`, `root` or `skills_root` (the message names the key);
 - a key is present but empty;
-- a value is not an absolute path after `~` expansion.
+- `repo` or `root` is not an absolute path after `~` expansion;
+- `skills_root` is not a checkout-relative directory path.
 
 If neither `$XDG_CONFIG_HOME` nor `$HOME` is a usable absolute path, the file
 cannot be located, and a run that needs it refuses with exit 2 saying it cannot
@@ -78,6 +85,10 @@ The canonical repo holds `agents/<name>.md` (the agents you link) and
 project only). A project key is the project's path relative to `$HOME`, for
 example `src/api`. Projects outside `$HOME` are keyed `_outside-home/<absolute
 path>`.
+
+Skills share these project keys. Agent Sync looks in
+`project-skills/<project-key>/<name>/` first, then in
+`<skills_root>/<name>/`. [Project skills](skills.md)
 
 ## Which tree gets scanned
 

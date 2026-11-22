@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -275,7 +276,7 @@ func TestApply_UnreadableExcludeFileIsNotOverwritten(t *testing.T) {
 	assertNoTemps(t, filepath.Dir(exclude), ".agentsync-exclude-")
 }
 
-// TestApply_ExclusionAddedSinceThePlanIsNotDuplicated: writeExclude re-reads
+// TestApply_ExclusionAddedSinceThePlanIsNotDuplicated: WriteExclude re-reads
 // the file instead of trusting the plan.
 func TestApply_ExclusionAddedSinceThePlanIsNotDuplicated(t *testing.T) {
 	f, plan, path, exclude := excludePlan(t)
@@ -323,7 +324,7 @@ func TestWriteExclude_FailedWriteIsReported(t *testing.T) {
 	project := filepath.Dir(filepath.Dir(testfs.UnreadableAgentsDir(t, t.TempDir())))
 	ex := Exclude{Project: "p", File: filepath.Join(project, "exclude"), Pattern: "/.claude/agents/"}
 
-	err := writeExclude(ex)
+	err := WriteExclude(ex.File, ex.Pattern)
 	if !errors.Is(err, syscall.ENAMETOOLONG) || !strings.Contains(err.Error(), "excluding") {
 		t.Fatalf("err = %v, want the exclusion's ENAMETOOLONG", err)
 	}
@@ -540,4 +541,38 @@ func TestApply_StateSaveFailureIsReported(t *testing.T) {
 	}
 	assertLink(t, path, filepath.Join(f.repoRoot, "agents", "shared.md"))
 	assertNoTemps(t, f.repoRoot, ".agentsync-state-")
+}
+
+func TestWriteExclude_ConcurrentRulesAreRetained(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "exclude")
+	if err := os.WriteFile(file, []byte(strings.Repeat("# existing rule\n", 32768)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const count = 12
+	results := make(chan error, count)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range count {
+		wg.Go(func() {
+			<-start
+			results <- WriteExclude(file, "/.claude/skills/skill-"+strconv.Itoa(i))
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range count {
+		if rule := "/.claude/skills/skill-" + strconv.Itoa(i) + "\n"; !strings.Contains(string(data), rule) {
+			t.Errorf("concurrent update lost rule %q", rule)
+		}
+	}
 }

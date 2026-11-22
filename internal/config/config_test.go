@@ -327,3 +327,102 @@ func mustWriteFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestSkillsRootConfiguration(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", base)
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, settings, want string
+		bad                  bool
+	}{
+		{name: "absent", settings: "root = '/root'"},
+		{name: "relative", settings: "skills_root = 'catalog/./shared'", want: "catalog/shared"},
+		{name: "independent", settings: "repo = false\nskills_root = 'shared'", want: "shared"},
+		{name: "invalid type", settings: "skills_root = false", bad: true},
+		{name: "absolute", settings: "skills_root = '/outside'", bad: true},
+		{name: "escape", settings: "skills_root = '../outside'", bad: true},
+		{name: "traversal", settings: "skills_root = 'a/../b'", bad: true},
+		{name: "home", settings: "skills_root = '~/outside'", bad: true},
+		{name: "root", settings: "skills_root = '.'", bad: true},
+		{name: "blank", settings: "skills_root = ' '", bad: true},
+		{name: "invalid legacy config", settings: "root = = invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(test.settings), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := SkillsRoot(false)
+			if got != test.want || (err != nil) != test.bad {
+				t.Fatalf("SkillsRoot = %q, %v; want %q, error=%v", got, err, test.want, test.bad)
+			}
+		})
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := SkillsRoot(true); got != "" || err != nil {
+		t.Fatalf("missing optional settings file = %q, %v", got, err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if got, err := SkillsRoot(false); got != "" || err != nil {
+		t.Fatalf("unavailable optional settings file = %q, %v", got, err)
+	}
+}
+
+func TestSkillConfigurationRefusesBrokenFiles(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", base)
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "missing"), path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SkillsRoot(true); err == nil || !strings.Contains(err.Error(), "dangling symlink") {
+		t.Fatalf("dangling config error = %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SkillsRoot(true); err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("unreadable config error = %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := SkillsRoot(true); err == nil || !strings.Contains(err.Error(), "cannot locate") {
+		t.Fatalf("unavailable config location error = %v", err)
+	}
+}
+
+func TestSkillsRootLoadAndRender(t *testing.T) {
+	settings := Config{Repo: "/repo", Root: "/projects", SkillsRoot: "catalog/shared"}
+	data, err := Render(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Load(writeConfig(t, string(data))); err != nil || got != settings {
+		t.Fatalf("Load(Render()) = %+v, %v; want %+v", got, err, settings)
+	}
+	settings.SkillsRoot = "../outside"
+	if _, err := Render(settings); err == nil {
+		t.Fatal("Render accepted an escaping skills root")
+	}
+	if _, err := Load(writeConfig(t, "skills_root = '../outside'\n")); err == nil {
+		t.Fatal("Load accepted an escaping skills root")
+	}
+}

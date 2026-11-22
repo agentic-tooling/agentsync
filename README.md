@@ -62,14 +62,20 @@ agentsync doctor                              # what has drifted
 
 Run without `--apply` first to see what a command would do.
 
+For Claude project skills, put a directory such as `skills/release-check/SKILL.md`
+in the canonical checkout. Run `agentsync link --skill release-check` from the
+project to preview the link, then add `--apply`. Use
+`agentsync import --skill release-check` to preview capturing an existing
+project skill and its support files. [Project skills](docs/skills.md)
+
 ## Commands
 
 | Command | Does |
 |---|---|
 | `init` | find your agents repo and write the config file |
-| `scan` | classify project agents against the canonical repo (read-only) |
-| `import` | capture project-only agents into `project-agents/` |
-| `link` | replace project agent files with symlinks into the canonical repo |
+| `scan` | classify project agents and skills against the canonical repo (read-only) |
+| `import` | capture project-only agents or selected skill directories |
+| `link` | provision project agents and selected skills from the canonical repo |
 | `doctor` | report broken, foreign, or mismatched links and stale captures; never writes |
 | `reconcile` | act on that drift, gated on what agentsync itself recorded |
 | `inventory` | regenerate `inventory.json`, a record of every agent on the machine |
@@ -85,6 +91,7 @@ Run without `--apply` first to see what a command would do.
 - [scan](docs/scan.md)
 - [import](docs/import.md)
 - [link](docs/link.md)
+- [Project skills](docs/skills.md)
 - [doctor](docs/doctor.md)
 - [reconcile](docs/reconcile.md)
 - [inventory](docs/inventory.md)

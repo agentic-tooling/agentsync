@@ -92,9 +92,16 @@ func (s *gitStderr) diagnostic() string {
 	}, line))
 }
 
-// runGit returns stdout on success and bounded stderr on a non-zero exit.
-// A non-zero exit can be a clean negative or a failure, so each probe interprets the code.
+// runGit trims stdout for probes that do not need exact pathname bytes.
 func runGit(dir string, args ...string) gitResult {
+	result := runGitRaw(dir, args...)
+	result.output = strings.TrimSpace(result.output)
+	return result
+}
+
+// runGitRaw preserves stdout on success and captures bounded stderr on a non-zero exit.
+// Each probe interprets the exit code to distinguish a clean negative from a failure.
+func runGitRaw(dir string, args ...string) gitResult {
 	cmd := exec.Command("git", args...)
 	// cmd.Dir rather than `git -C`: the working directory is the thing that
 	// actually selects the repository, and it cannot be confused with a
@@ -108,7 +115,7 @@ func runGit(dir string, args ...string) gitResult {
 
 	err := cmd.Run()
 	if err == nil {
-		return gitResult{output: strings.TrimSpace(out.String()), answer: gitYes}
+		return gitResult{output: out.String(), answer: gitYes}
 	}
 
 	var exitErr *exec.ExitError
@@ -590,14 +597,22 @@ type DirGit struct {
 // falling through to a "no", because a caller about to write must be able to
 // tell "git says this is clean" from "git did not say".
 func InspectDir(dir string) DirGit {
-	d := DirGit{Dir: dir, Tracking: DirUnknown}
+	return inspectPath(dir, existingAncestor(dir), false)
+}
 
-	probe := existingAncestor(dir)
+// InspectSkillPath checks a project-relative path without following its leaf.
+// Both indexed and committed paths can be shadowed by a symlink.
+func InspectSkillPath(project, rel string) DirGit {
+	return inspectPath(filepath.Join(project, rel), project, true)
+}
+
+func inspectPath(dir, probe string, skill bool) DirGit {
+	d := DirGit{Dir: dir, Tracking: DirUnknown}
 	if probe == "" {
 		return d
 	}
 
-	result := runGit(probe, "rev-parse", "--show-toplevel")
+	result := runGitRaw(probe, "rev-parse", "--show-toplevel")
 	switch result.answer {
 	case gitUnavailable:
 		return d
@@ -621,6 +636,11 @@ func InspectDir(dir string) DirGit {
 		return d
 	}
 	top := result.output
+	if skill {
+		top = strings.TrimSuffix(top, "\n")
+	} else {
+		top = strings.TrimSpace(top)
+	}
 	if top == "" {
 		// git succeeded and told us nothing usable (a bare repo, an odd
 		// worktree). Do not guess.
@@ -647,13 +667,20 @@ func InspectDir(dir string) DirGit {
 	d.GitDir = result.output
 	d.GitDirDiagnostic = result.diagnostic
 
-	rel, err := filepath.Rel(top, resolveMissing(dir))
+	resolved := dir
+	if !skill {
+		resolved = resolveMissing(dir)
+	}
+	rel, err := filepath.Rel(top, resolved)
 	if err != nil || !contains(rel) {
 		// The directory is not under the root git handed us. We cannot form
 		// a meaningful question, so we do not answer one.
 		return d
 	}
 	d.Rel = filepath.ToSlash(rel)
+	if skill {
+		return inspectSkillGit(d)
+	}
 
 	// An unborn HEAD is a repository that has committed nothing, so nothing
 	// under this directory is tracked. That is a real answer — --quiet makes
@@ -698,6 +725,70 @@ func InspectDir(dir string) DirGit {
 		d.Tracking = DirVisible
 	default:
 		d.Diagnostic = result.diagnostic
+	}
+	return d
+}
+
+// SkillExcludePath asks Git for the shared info/exclude, including in worktrees.
+func SkillExcludePath(root string) string {
+	result := runGit(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+	if result.answer != gitYes || !filepath.IsAbs(result.output) {
+		return ""
+	}
+	return result.output
+}
+
+func inspectSkillGit(d DirGit) DirGit {
+	// Query the first component as well so an indexed ancestor file or
+	// gitlink is found even when it disappeared from the working tree.
+	prefix, _, _ := strings.Cut(d.Rel, "/")
+	pathspec := []string{"--", prefix}
+	result := runGit(d.Root, "config", "--type=bool", "--get", "core.ignoreCase")
+	if result.answer != gitYes && !(result.answer == gitNo && result.code == gitSaidNo) {
+		return d
+	}
+	ignoreCase := result.output == "true"
+	if ignoreCase {
+		// ls-tree has no case-insensitive pathspec. Filter its output below
+		// so case aliases cannot shadow an indexed or committed path.
+		pathspec = []string{"--"}
+	}
+	result = runGitRaw(d.Root, append([]string{"--literal-pathspecs", "ls-files", "-z"}, pathspec...)...)
+	if result.answer != gitYes {
+		return d
+	}
+	paths := result.output
+	result = runGit(d.Root, "rev-parse", "--verify", "--quiet", "HEAD")
+	switch {
+	case result.answer == gitYes:
+		tree := runGitRaw(d.Root, append([]string{"--literal-pathspecs", "ls-tree", "-r", "--name-only", "-z", "HEAD"}, pathspec...)...)
+		if tree.answer != gitYes {
+			return d
+		}
+		paths += tree.output
+	case result.answer == gitNo && result.code == gitSaidNo:
+	default:
+		return d
+	}
+	rel := d.Rel
+	if ignoreCase {
+		rel = strings.ToLower(rel)
+	}
+	for name := range strings.SplitSeq(paths, "\x00") {
+		if ignoreCase {
+			name = strings.ToLower(name)
+		}
+		if name != "" && (name == rel || strings.HasPrefix(name, rel+"/") || strings.HasPrefix(rel, name+"/")) {
+			d.Tracking = DirTracked
+			return d
+		}
+	}
+	result = runGit(d.Root, "check-ignore", "-q", "--", d.Rel)
+	switch {
+	case result.answer == gitYes:
+		d.Tracking = DirIgnored
+	case result.answer == gitNo && result.code == gitSaidNo:
+		d.Tracking = DirVisible
 	}
 	return d
 }

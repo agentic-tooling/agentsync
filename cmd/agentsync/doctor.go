@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentic-tooling/agentsync/internal/doctor"
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/skills"
 )
 
 // runDoctor reports the ways this repo and the projects it serves have drifted
@@ -64,13 +65,20 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
+	skillReport, err := scanSkills(repo, res.SkillDirs)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentsync: %v\n", err)
+		return exitFailure
+	}
+	dirs := append(res.Dirs, skillReport.Dirs...)
 	run := doctorRun{
 		repoRoot: repo.Root,
 		root:     root.Path,
 		home:     repo.Home,
 		res:      res,
-		check:    repo.CheckHome(root.Path, res.Dirs),
+		check:    repo.CheckHome(root.Path, dirs),
 		report:   doctor.Diagnose(repo, res),
+		skills:   skillReport,
 	}
 	findings, problems := overrideFindings(repo.Home, res.Dirs)
 	run.report.Findings = append(run.report.Findings, findings...)
@@ -85,7 +93,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	// projects the scan walked, HomeWarning judges the capture keys nothing
 	// walked, and the reproduction that made this necessary is precisely the
 	// run where the first has nothing to say and the second has everything.
-	warnHome(stderr, repo, root.Path, res.Dirs, *allowOutsideHome)
+	warnHome(stderr, repo, root.Path, dirs, *allowOutsideHome)
 	if warning := run.report.HomeWarning(repo.Home); warning != "" {
 		fmt.Fprintf(stderr, "agentsync: warning: %s\n", warning)
 	}
@@ -114,6 +122,7 @@ type doctorRun struct {
 	res      scan.Result
 	check    scan.HomeCheck
 	report   doctor.Report
+	skills   skills.Report
 }
 
 // exitCode maps the run onto the CLI contract.
@@ -132,10 +141,10 @@ type doctorRun struct {
 // A foreign link never affects the code, in either direction. It is reported and
 // it is not a fault.
 func (r doctorRun) exitCode() int {
-	if len(r.report.Problems) > 0 {
+	if len(r.report.Problems)+len(r.skills.Problems) > 0 {
 		return exitFailure
 	}
-	if len(r.report.NeedsHuman()) > 0 || len(r.res.Problems) > 0 {
+	if len(r.report.NeedsHuman())+len(r.res.Problems)+len(r.skills.AtRisk().Entries) > 0 {
 		return exitAtRisk
 	}
 	return exitOK
@@ -144,7 +153,7 @@ func (r doctorRun) exitCode() int {
 // incomplete reports whether the scan failed to look at part of the tree, which
 // disqualifies the summary from claiming everything lines up.
 func (r doctorRun) incomplete() bool {
-	return len(r.res.Problems) > 0 || len(r.report.Problems) > 0
+	return len(r.res.Problems)+len(r.report.Problems)+len(r.skills.Problems) > 0
 }
 
 // doctorHome is the home-directory signal in machine-readable form.
@@ -179,6 +188,7 @@ type doctorHome struct {
 
 // doctorReport is the --json form.
 type doctorReport struct {
+	skills.Report
 	Repo     string             `json:"repo"`
 	Root     string             `json:"root"`
 	Home     doctorHome         `json:"home"`
@@ -195,8 +205,9 @@ type doctorReport struct {
 
 func (r doctorRun) emitJSON(w io.Writer) error {
 	rep := doctorReport{
-		Repo: r.repoRoot,
-		Root: r.root,
+		Report: r.skills,
+		Repo:   r.repoRoot,
+		Root:   r.root,
 		Home: doctorHome{
 			Status:  r.check.Status.String(),
 			Path:    r.check.Home,
@@ -264,6 +275,7 @@ func (r doctorRun) emitText(w io.Writer) {
 	}
 
 	emitDoctorProblems(w, r.report.Problems, r.res.Problems)
+	emitSkills(w, r.skills)
 
 	fmt.Fprintln(w, strings.Repeat("-", 60))
 	r.emitSummary(w)
@@ -281,7 +293,7 @@ func (r doctorRun) emitSummary(w io.Writer) {
 	// project's own git tracks, and on a --project key that names nothing.
 	// None of those is drift, none is doctor's to find, and a summary that
 	// read like an all-clear for the whole toolchain would be relied on as one.
-	switch n := len(r.report.NeedsHuman()); {
+	switch n := len(r.report.NeedsHuman()) + len(r.skills.AtRisk().Entries); {
 	case n == 0 && !r.incomplete():
 		fmt.Fprintln(w, "Nothing has drifted: every link resolves to its counterpart and every capture has a live file.")
 		fmt.Fprintln(w, "That is a statement about drift only — whether `link` would run clean is its own question, and `agentsync link` answers it.")
