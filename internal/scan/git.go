@@ -3,12 +3,12 @@ package scan
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // Tracked records whether a file is committed in the git repository that owns
@@ -59,31 +59,49 @@ const (
 	gitNo
 )
 
-// runGit executes git in dir and reports which of the three outcomes occurred.
-// Trimmed stdout is returned for the gitYes case.
-func runGit(dir string, args ...string) (string, gitAnswer) {
-	out, ans, _ := runGitCode(dir, args...)
-	return out, ans
+type gitResult struct {
+	output     string
+	answer     gitAnswer
+	code       int
+	diagnostic string
 }
 
-// runGitCode is runGit plus the process exit code.
-//
-// gitNo alone is not enough for a caller that must not guess. git exits
-// non-zero both when it is answering "no" — check-ignore finding no match,
-// rev-parse failing to verify an unborn HEAD, both documented as 1 — and when
-// it could not answer at all, which is 128 and covers a corrupt object store,
-// an unreadable .git, and safe.directory refusing a checkout it considers
-// dubiously owned. Those two mean opposite things on a write path, and only
-// the exit code separates them.
-//
-// The code is meaningful only when the answer is gitNo; it is 0 otherwise.
-func runGitCode(dir string, args ...string) (string, gitAnswer, int) {
-	out, answer, code := runGitRaw(dir, args...)
-	return strings.TrimSpace(out), answer, code
+const maxGitDiagnosticBytes = 512
+
+type gitStderr struct {
+	prefix [maxGitDiagnosticBytes]byte
+	used   int
 }
 
-// runGitRaw preserves the bytes in Git pathname records.
-func runGitRaw(dir string, args ...string) (string, gitAnswer, int) {
+func (s *gitStderr) Write(p []byte) (int, error) {
+	s.used += copy(s.prefix[s.used:], p)
+	return len(p), nil
+}
+
+func (s *gitStderr) diagnostic() string {
+	line := string(s.prefix[:s.used])
+	if end := strings.IndexAny(line, "\r\n\u0085\u2028\u2029"); end >= 0 {
+		line = line[:end]
+	}
+	line = strings.ToValidUTF8(line, "")
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, line))
+}
+
+// runGit trims stdout for probes that do not need exact pathname bytes.
+func runGit(dir string, args ...string) gitResult {
+	result := runGitRaw(dir, args...)
+	result.output = strings.TrimSpace(result.output)
+	return result
+}
+
+// runGitRaw preserves stdout on success and captures bounded stderr on a non-zero exit.
+// Each probe interprets the exit code to distinguish a clean negative from a failure.
+func runGitRaw(dir string, args ...string) gitResult {
 	cmd := exec.Command("git", args...)
 	// cmd.Dir rather than `git -C`: the working directory is the thing that
 	// actually selects the repository, and it cannot be confused with a
@@ -91,24 +109,25 @@ func runGitRaw(dir string, args ...string) (string, gitAnswer, int) {
 	cmd.Dir = dir
 
 	var out bytes.Buffer
+	var stderr gitStderr
 	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 	if err == nil {
-		return out.String(), gitYes, 0
+		return gitResult{output: out.String(), answer: gitYes}
 	}
 
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		// A non-zero exit is git answering the question — or reporting that
 		// it could not. The caller decides which, from the code.
-		return "", gitNo, exitErr.ExitCode()
+		return gitResult{answer: gitNo, code: exitErr.ExitCode(), diagnostic: stderr.diagnostic()}
 	}
 
 	// git is missing, not executable, or the directory is gone: we did not
 	// get an answer.
-	return "", gitUnavailable, 0
+	return gitResult{}
 }
 
 // gitSaidNo is the exit code git uses for a real negative answer. Anything
@@ -124,6 +143,8 @@ type gitRoot struct {
 	// repository whose HEAD is unborn), and gitUnavailable when git could
 	// not be run.
 	status gitAnswer
+
+	diagnostic string
 }
 
 // gitProber answers "is this committed?" and caches the per-directory repo
@@ -156,8 +177,8 @@ func (g *gitProber) root(dir string) gitRoot {
 }
 
 func probeGitRoot(dir string) gitRoot {
-	top, ans := runGit(dir, "rev-parse", "--show-toplevel")
-	switch ans {
+	result := runGit(dir, "rev-parse", "--show-toplevel")
+	switch result.answer {
 	case gitUnavailable:
 		return gitRoot{status: gitUnavailable}
 	case gitNo:
@@ -183,11 +204,12 @@ func probeGitRoot(dir string) gitRoot {
 		// remedy that is wrong, and a remedy that cannot work is worse
 		// than "git could not say", because the user carries it out.
 		if hasGitEntry(dir) {
-			return gitRoot{status: gitUnavailable}
+			return gitRoot{status: gitUnavailable, diagnostic: result.diagnostic}
 		}
 		// Genuinely not inside a repository.
 		return gitRoot{status: gitNo}
 	}
+	top := result.output
 	if top == "" {
 		// git succeeded but told us nothing usable (bare repo, odd
 		// worktree). Do not guess.
@@ -242,15 +264,15 @@ func probeGitRoot(dir string) gitRoot {
 	// and in InspectDir below: distinguishing unreadable refs from an unborn
 	// HEAD requires filesystem corroboration in the style of hasGitEntry,
 	// rather than relying on the exit code alone.
-	_, ans, code := runGitCode(top, "rev-parse", "--verify", "--quiet", "HEAD")
+	result = runGit(top, "rev-parse", "--verify", "--quiet", "HEAD")
 	switch {
-	case ans == gitYes:
+	case result.answer == gitYes:
 		// HEAD resolves; the repository has at least one commit.
-	case ans == gitNo && code == gitSaidNo:
+	case result.answer == gitNo && result.code == gitSaidNo:
 		// Unborn HEAD. A real "no".
 		return gitRoot{status: gitNo}
 	default:
-		return gitRoot{status: gitUnavailable}
+		return gitRoot{status: gitUnavailable, diagnostic: result.diagnostic}
 	}
 
 	return gitRoot{top: top, status: gitYes}
@@ -275,38 +297,20 @@ func (g *gitProber) tracked(path string) Tracked {
 	case gitNo:
 		return TrackedNo
 	}
+	answer, _ := trackedInTree(loc.root, loc.rel)
+	return answer
+}
 
-	// ls-tree has no negative exit. It exits 0 and prints nothing when the
-	// pathspec matches nothing — verified against git 2.50 — so the empty
-	// output below is the whole of "not in HEAD", and a non-zero exit here
-	// is never an answer. It is git failing: a commit object that is not in
-	// the store, safe.directory, an unreadable pack. Confirmed reachable
-	// with --show-toplevel and rev-parse --verify HEAD both still exiting 0:
-	// delete the HEAD commit object and only ls-tree notices.
-	//
-	// This collapsed into TrackedNo, which over-reported risk rather than
-	// under-reporting it — Entry.AtRisk is State.AtRisk() && Tracked !=
-	// TrackedYes, so a false TrackedNo makes a file at risk, the safe
-	// direction. It is fixed for the reason the reported reason has to be
-	// true, not because anything was unsafe: TrackedUnknown is also !=
-	// TrackedYes, so nothing about risk classification changes.
-	//
-	// What does change is CommittedInHEAD, which turns TrackedNo into
-	// CommittedNo and TrackedUnknown into CommittedUnknown. Both refuse an
-	// --update, and only the second one's message is true when the object
-	// store is damaged.
-	//
-	// InspectDir's ls-tree already refuses on any non-zero for exactly this
-	// reason; the two now agree.
-	out, ans := runGit(loc.root, "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", loc.rel)
-	if ans != gitYes {
-		return TrackedUnknown
+// ls-tree returns empty stdout for an absent path. Every non-zero exit is a failure to read the tree.
+func trackedInTree(root, rel string) (Tracked, string) {
+	result := runGit(root, "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", rel)
+	if result.answer != gitYes {
+		return TrackedUnknown, result.diagnostic
 	}
-	if strings.TrimSpace(out) == "" {
-		// git succeeded and matched nothing: the path is not in HEAD.
-		return TrackedNo
+	if result.output == "" {
+		return TrackedNo, ""
 	}
-	return TrackedYes
+	return TrackedYes, ""
 }
 
 // located is one path expressed the way git wants to be asked about it: the
@@ -318,9 +322,10 @@ func (g *gitProber) tracked(path string) Tracked {
 // repository (so there is a real negative answer without asking anything), and
 // gitUnavailable when the question could not be formed at all.
 type located struct {
-	root   string
-	rel    string
-	status gitAnswer
+	root       string
+	rel        string
+	status     gitAnswer
+	diagnostic string
 }
 
 // locate resolves path into the repository-relative form every query below
@@ -335,7 +340,7 @@ func (g *gitProber) locate(path string) located {
 	root := g.root(dir)
 	switch root.status {
 	case gitUnavailable:
-		return located{status: gitUnavailable}
+		return located{status: gitUnavailable, diagnostic: root.diagnostic}
 	case gitNo:
 		return located{status: gitNo}
 	}
@@ -421,10 +426,6 @@ func (c Committed) String() string {
 // every other outcome refuses. Making CommittedUnknown the zero value keeps
 // a forgotten case on the refusing side.
 //
-// Moving this into the calling package was rejected: it would duplicate
-// runGitCode's exit-code handling into a second place, which is exactly how
-// that bug class came to have four members.
-//
 // # Why the blob has to be asked for separately
 //
 // Without question 3 this returns CommittedYes for a path whose blob is missing
@@ -466,56 +467,43 @@ func (c Committed) String() string {
 // an update that could have proceeded, and the remedy — any ordinary git
 // command in the repo — is one the user is being told to run anyway.
 func CommittedInHEAD(path string) Committed {
+	answer, _ := CommittedInHEADWithDiagnostic(path)
+	return answer
+}
+
+// CommittedInHEADWithDiagnostic also returns the failed Git probe's diagnostic, when available.
+func CommittedInHEADWithDiagnostic(path string) (Committed, string) {
 	var g gitProber
 
 	loc := g.locate(path)
 	switch loc.status {
 	case gitUnavailable:
-		return CommittedUnknown
+		return CommittedUnknown, loc.diagnostic
 	case gitNo:
-		// No repository at all, so nothing here is in any commit.
-		return CommittedNo
+		return CommittedNo, ""
 	}
 
-	// The path question first. It shares the prober, so the repository
-	// lookup it needs is already cached from locate above.
-	switch g.tracked(path) {
+	tracked, diagnostic := trackedInTree(loc.root, loc.rel)
+	switch tracked {
 	case TrackedUnknown:
-		return CommittedUnknown
+		return CommittedUnknown, diagnostic
 	case TrackedNo:
-		return CommittedNo
+		return CommittedNo, ""
 	}
 
-	// Then the content question. --quiet implies --exit-code: 0 when the
-	// working file matches HEAD, 1 when it differs. Anything else is git
-	// failing rather than answering — the causes runGitCode's doc
-	// enumerates, plus, uniquely on this query, a blob that git needed to
-	// read in order to compare and could not.
-	_, ans, code := runGitCode(loc.root, "diff", "--quiet", "HEAD", "--", loc.rel)
+	diff := runGit(loc.root, "diff", "--quiet", "HEAD", "--", loc.rel)
 	switch {
-	case ans == gitYes:
-		// Both questions said yes. Everything above was answered from the
-		// index and the tree; nothing has yet opened the blob itself.
-		//
-		// This is the one probe in the file that deliberately does NOT
-		// apply the gitSaidNo discipline, and applying it here would be
-		// the bug rather than the fix. `cat-file -e` on a blob missing
-		// from the object store exits **1**, not 128 — measured against
-		// git 2.50 — so a `code == gitSaidNo` arm would read a damaged
-		// repository as a clean negative and hand back CommittedNo. That
-		// is a definite answer about content that is in fact unaccounted
-		// for. ls-tree has already established the path is in HEAD, so
-		// there is no ordinary negative left for this question to have:
-		// every non-zero is a repository that cannot produce the bytes,
-		// and every non-zero is therefore CommittedUnknown.
-		if _, ans := runGit(loc.root, "cat-file", "-e", "HEAD:"+loc.rel); ans != gitYes {
-			return CommittedUnknown
+	case diff.answer == gitYes:
+		// A missing blob may exit 1 even though the tree still references it.
+		blob := runGit(loc.root, "cat-file", "-e", "HEAD:"+loc.rel)
+		if blob.answer != gitYes {
+			return CommittedUnknown, blob.diagnostic
 		}
-		return CommittedYes
-	case ans == gitNo && code == gitSaidNo:
-		return CommittedNo
+		return CommittedYes, ""
+	case diff.answer == gitNo && diff.code == gitSaidNo:
+		return CommittedNo, ""
 	default:
-		return CommittedUnknown
+		return CommittedUnknown, diff.diagnostic
 	}
 }
 
@@ -577,6 +565,9 @@ type DirGit struct {
 
 	Tracking DirTracking
 
+	// Diagnostic describes the Git failure behind DirUnknown, when available.
+	Diagnostic string
+
 	// Root is the repository's worktree root, resolved. Empty when there is
 	// no repository or the question could not be asked.
 	Root string
@@ -585,6 +576,9 @@ type DirGit struct {
 	// is where info/exclude lives. Empty on the same terms as Root, and also
 	// when git declined to name it.
 	GitDir string
+
+	// GitDirDiagnostic describes a failed GitDir lookup for callers that need a local exclusion.
+	GitDirDiagnostic string
 
 	// Rel is Dir relative to Root, slash-separated — the form a git
 	// pathspec and a .git/info/exclude pattern both want.
@@ -618,13 +612,8 @@ func inspectPath(dir, probe string, skill bool) DirGit {
 		return d
 	}
 
-	top, ans, _ := runGitRaw(probe, "rev-parse", "--show-toplevel")
-	if skill {
-		top = strings.TrimSuffix(top, "\n")
-	} else {
-		top = strings.TrimSpace(top)
-	}
-	switch ans {
+	result := runGitRaw(probe, "rev-parse", "--show-toplevel")
+	switch result.answer {
 	case gitUnavailable:
 		return d
 	case gitNo:
@@ -640,10 +629,17 @@ func inspectPath(dir, probe string, skill bool) DirGit {
 		// "no repository" turns the gate off for every project in exactly
 		// the environments that need it most.
 		if hasGitEntry(probe) {
+			d.Diagnostic = result.diagnostic
 			return d
 		}
 		d.Tracking = DirNoRepo
 		return d
+	}
+	top := result.output
+	if skill {
+		top = strings.TrimSuffix(top, "\n")
+	} else {
+		top = strings.TrimSpace(top)
 	}
 	if top == "" {
 		// git succeeded and told us nothing usable (a bare repo, an odd
@@ -667,9 +663,9 @@ func inspectPath(dir, probe string, skill bool) DirGit {
 	// caller that needs it — linker's --exclude-local — blocks on
 	// `GitDir == ""` rather than proceeding without an exclusion, so the
 	// ambiguity never reaches a decision that could go the permissive way.
-	if gitDir, ans := runGit(probe, "rev-parse", "--absolute-git-dir"); ans == gitYes && gitDir != "" {
-		d.GitDir = gitDir
-	}
+	result = runGit(probe, "rev-parse", "--absolute-git-dir")
+	d.GitDir = result.output
+	d.GitDirDiagnostic = result.diagnostic
 
 	resolved := dir
 	if !skill {
@@ -699,51 +695,47 @@ func inspectPath(dir, probe string, skill bool) DirGit {
 	// reaches the ignore check as though it had no commits, and lands on
 	// DirVisible or DirIgnored — the permissive side. Distinguishing these
 	// cases remains an unresolved limitation of this exit-code check.
-	_, ans, code := runGitCode(top, "rev-parse", "--verify", "--quiet", "HEAD")
+	result = runGit(top, "rev-parse", "--verify", "--quiet", "HEAD")
 	switch {
-	case ans == gitYes:
-		// ls-tree exits 0 and prints nothing when a pathspec matches
-		// nothing, so a non-zero exit here is never "not tracked" — it is
-		// git failing, most plainly on a commit whose object is missing.
-		// Falling through to the ignore check on that would hand back
-		// DirVisible or DirIgnored for a directory that is genuinely
-		// tracked, which is the same silent pass by a different route.
-		out, ans := runGit(top, "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", d.Rel)
-		if ans != gitYes {
+	case result.answer == gitYes:
+		tracked, diagnostic := trackedInTree(top, d.Rel)
+		switch tracked {
+		case TrackedUnknown:
+			d.Diagnostic = diagnostic
 			return d
-		}
-		if strings.TrimSpace(out) != "" {
+		case TrackedYes:
 			d.Tracking = DirTracked
 			return d
 		}
-	case ans == gitNo && code == gitSaidNo:
+	case result.answer == gitNo && result.code == gitSaidNo:
 		// Unborn HEAD. Nothing is committed; carry on to the ignore check.
 	default:
+		d.Diagnostic = result.diagnostic
 		return d
 	}
 
 	// check-ignore exits 0 for ignored and 1 for not ignored. Anything else
 	// non-zero is git failing rather than answering, and a failure here must
 	// not read as "not ignored".
-	_, ans, code = runGitCode(top, "check-ignore", "-q", "--", d.Rel)
+	result = runGit(top, "check-ignore", "-q", "--", d.Rel)
 	switch {
-	case ans == gitYes:
+	case result.answer == gitYes:
 		d.Tracking = DirIgnored
-	case ans == gitNo && code == gitSaidNo:
+	case result.answer == gitNo && result.code == gitSaidNo:
 		d.Tracking = DirVisible
 	default:
-		return d
+		d.Diagnostic = result.diagnostic
 	}
 	return d
 }
 
 // SkillExcludePath asks Git for the shared info/exclude, including in worktrees.
 func SkillExcludePath(root string) string {
-	path, answer := runGit(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
-	if answer != gitYes || !filepath.IsAbs(path) {
+	result := runGit(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+	if result.answer != gitYes || !filepath.IsAbs(result.output) {
 		return ""
 	}
-	return path
+	return result.output
 }
 
 func inspectSkillGit(d DirGit) DirGit {
@@ -751,37 +743,39 @@ func inspectSkillGit(d DirGit) DirGit {
 	// gitlink is found even when it disappeared from the working tree.
 	prefix, _, _ := strings.Cut(d.Rel, "/")
 	pathspec := []string{"--", prefix}
-	ignoreCase, answer, code := runGitCode(d.Root, "config", "--type=bool", "--get", "core.ignoreCase")
-	if answer != gitYes && !(answer == gitNo && code == gitSaidNo) {
+	result := runGit(d.Root, "config", "--type=bool", "--get", "core.ignoreCase")
+	if result.answer != gitYes && !(result.answer == gitNo && result.code == gitSaidNo) {
 		return d
 	}
-	if ignoreCase == "true" {
+	ignoreCase := result.output == "true"
+	if ignoreCase {
 		// ls-tree has no case-insensitive pathspec. Filter its output below
 		// so case aliases cannot shadow an indexed or committed path.
 		pathspec = []string{"--"}
 	}
-	index, answer, _ := runGitRaw(d.Root, append([]string{"--literal-pathspecs", "ls-files", "-z"}, pathspec...)...)
-	if answer != gitYes {
+	result = runGitRaw(d.Root, append([]string{"--literal-pathspecs", "ls-files", "-z"}, pathspec...)...)
+	if result.answer != gitYes {
 		return d
 	}
-	_, answer, code = runGitCode(d.Root, "rev-parse", "--verify", "--quiet", "HEAD")
+	paths := result.output
+	result = runGit(d.Root, "rev-parse", "--verify", "--quiet", "HEAD")
 	switch {
-	case answer == gitYes:
-		tree, answer, _ := runGitRaw(d.Root, append([]string{"--literal-pathspecs", "ls-tree", "-r", "--name-only", "-z", "HEAD"}, pathspec...)...)
-		if answer != gitYes {
+	case result.answer == gitYes:
+		tree := runGitRaw(d.Root, append([]string{"--literal-pathspecs", "ls-tree", "-r", "--name-only", "-z", "HEAD"}, pathspec...)...)
+		if tree.answer != gitYes {
 			return d
 		}
-		index += tree
-	case answer == gitNo && code == gitSaidNo:
+		paths += tree.output
+	case result.answer == gitNo && result.code == gitSaidNo:
 	default:
 		return d
 	}
 	rel := d.Rel
-	if ignoreCase == "true" {
+	if ignoreCase {
 		rel = strings.ToLower(rel)
 	}
-	for name := range strings.SplitSeq(index, "\x00") {
-		if ignoreCase == "true" {
+	for name := range strings.SplitSeq(paths, "\x00") {
+		if ignoreCase {
 			name = strings.ToLower(name)
 		}
 		if name != "" && (name == rel || strings.HasPrefix(name, rel+"/") || strings.HasPrefix(rel, name+"/")) {
@@ -789,11 +783,11 @@ func inspectSkillGit(d DirGit) DirGit {
 			return d
 		}
 	}
-	_, answer, code = runGitCode(d.Root, "check-ignore", "-q", "--", d.Rel)
+	result = runGit(d.Root, "check-ignore", "-q", "--", d.Rel)
 	switch {
-	case answer == gitYes:
+	case result.answer == gitYes:
 		d.Tracking = DirIgnored
-	case answer == gitNo && code == gitSaidNo:
+	case result.answer == gitNo && result.code == gitSaidNo:
 		d.Tracking = DirVisible
 	}
 	return d

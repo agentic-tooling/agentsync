@@ -84,6 +84,30 @@ func TestInspectSkillGit(t *testing.T) {
 	}
 }
 
+func TestInspectSkillPathPreservesGitPathWhitespace(t *testing.T) {
+	requireGit(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(root, "repo ")
+	mustMkdir(t, repo)
+	testfs.GitRepo(t, repo, "README", "fixture")
+	project := filepath.Join(repo, " project")
+	skill := ".claude/skills/build"
+	rel := filepath.Join(" project", skill)
+	mustWrite(t, filepath.Join(project, skill, "SKILL.md"), "skill")
+	testfs.Git(t, repo, "add", "--", rel)
+	if got := InspectSkillPath(project, skill); got.Tracking != DirTracked {
+		t.Fatalf("indexed skill: tracking = %s, want %s", got.Tracking, DirTracked)
+	}
+	testfs.Git(t, repo, "commit", "-qm", "skill")
+	testfs.Git(t, repo, "rm", "-r", "--cached", "--", rel)
+	if got := InspectSkillPath(project, skill); got.Tracking != DirTracked {
+		t.Fatalf("HEAD-only skill: tracking = %s, want %s", got.Tracking, DirTracked)
+	}
+}
+
 func TestSkillExcludePathUsesCommonGitDirectory(t *testing.T) {
 	requireGit(t)
 	repo, err := filepath.EvalSymlinks(t.TempDir())

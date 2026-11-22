@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentic-tooling/agentsync/internal/scan"
+	"github.com/agentic-tooling/agentsync/internal/testfs"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -704,30 +705,43 @@ func TestNewPlan_UpdateRefusesWhenGitCannotAnswer(t *testing.T) {
 func TestApply_UpdateRefusesWhenGitCannotAnswerAtWriteTime(t *testing.T) {
 	requireGit(t)
 
-	f := newFixture(t)
-	f.project("solo", "bespoke", "the current project file\n")
-	dest := f.backup("solo", "bespoke", "an older capture\n")
-	f.commitRepo()
+	for _, tc := range []struct {
+		name       string
+		breakGit   func(*fixture)
+		diagnostic string
+	}{
+		{"git unavailable", func(f *fixture) { noGit(f.t) }, ""},
+		{"packed refs corrupt", func(f *fixture) { testfs.CorruptPackedRefs(f.t, f.repoRoot) }, "packed-refs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.project("solo", "bespoke", "the current project file\n")
+			dest := f.backup("solo", "bespoke", "an older capture\n")
+			f.commitRepo()
 
-	// Planned while git could answer, so this really is an authorised
-	// update rather than a conflict the planner already rejected.
-	plan := f.plan(Options{Update: UpdateAll()})
-	assertActions(t, plan, map[string]Action{"solo/bespoke": ActionUpdate})
+			plan := f.plan(Options{Update: UpdateAll()})
+			assertActions(t, plan, map[string]Action{"solo/bespoke": ActionUpdate})
+			tc.breakGit(f)
 
-	noGit(t)
-
-	written, errs := plan.Apply()
-	if len(written) != 0 {
-		t.Errorf("wrote %v, want nothing", written)
-	}
-	if len(errs) != 1 {
-		t.Fatalf("errors = %v, want exactly one refusal", errs)
-	}
-	if !strings.Contains(errs[0].Error(), "refusing to replace") {
-		t.Errorf("error = %v, want a refusal to replace", errs[0])
-	}
-	if got := mustRead(t, dest); got != "an older capture\n" {
-		t.Errorf("destination = %q — it was replaced without the gate being satisfied", got)
+			written, errs := plan.Apply()
+			if len(written) != 0 {
+				t.Errorf("wrote %v, want nothing", written)
+			}
+			if len(errs) != 1 {
+				t.Fatalf("errors = %v, want exactly one refusal", errs)
+			}
+			reason := errs[0].Error()
+			if !strings.Contains(reason, "refusing to replace") {
+				t.Errorf("error = %q, want a refusal to replace", reason)
+			}
+			_, reported, hasDiagnostic := strings.Cut(reason, "Git reported: ")
+			if hasDiagnostic != (tc.diagnostic != "") || !strings.Contains(reported, tc.diagnostic) {
+				t.Errorf("error = %q, want Git diagnostic %q", reason, tc.diagnostic)
+			}
+			if got := mustRead(t, dest); got != "an older capture\n" {
+				t.Errorf("destination = %q — it was replaced without the gate being satisfied", got)
+			}
+		})
 	}
 }
 

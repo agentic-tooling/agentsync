@@ -51,10 +51,17 @@ func gitWithoutGitDir(t *testing.T) {
 		t.Fatalf("git not on PATH: %v", err)
 	}
 	bin := t.TempDir()
-	script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = --absolute-git-dir ] && exit 128; done\nexec '" + real + "' \"$@\"\n"
+	script := `#!/bin/sh
+if [ "$2" = --absolute-git-dir ]; then
+  printf '%s\n' 'fatal: git directory unavailable' >&2
+  exit 128
+fi
+exec "$AGENTSYNC_TEST_REAL_GIT" "$@"
+`
 	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("AGENTSYNC_TEST_REAL_GIT", real)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
@@ -67,6 +74,9 @@ func TestNewPlan_ExcludeLocalWithoutAGitDirIsRefused(t *testing.T) {
 	plan := f.plan(Options{ExcludeLocal: true})
 	if len(plan.Blocked) != 1 || !strings.Contains(plan.Blocked[0].Reason, "git directory") {
 		t.Fatalf("blocked = %+v, want the project refused for want of a git directory", plan.Blocked)
+	}
+	if !strings.Contains(plan.Blocked[0].Reason, "Git reported: fatal: git directory unavailable") {
+		t.Errorf("blocked reason omitted the Git diagnostic: %s", plan.Blocked[0].Reason)
 	}
 	if len(plan.Excludes) != 0 || len(plan.Writes()) != 0 {
 		t.Errorf("planned excludes %v and writes %v with nowhere to exclude into", plan.Excludes, plan.Writes())

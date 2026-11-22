@@ -127,6 +127,9 @@ func TestRunLink_ApplyLinksAndIsIdempotent(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitOK, stdout, stderr)
 	}
+	if strings.Contains(stdout, "Git reported:") {
+		t.Errorf("a non-repository got a Git diagnostic:\n%s", stdout)
+	}
 	assertIsLink(t, path, target)
 
 	code, stdout, stderr = runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
@@ -427,21 +430,47 @@ func TestRunLink_AgentNameCannotEscapeTheProject(t *testing.T) {
 // gate being silently off: git exits non-zero, a repository plainly exists, and
 // the adoptable file must survive.
 func TestRunLink_TrackedProjectWithAnUnaskableGitIsRefused(t *testing.T) {
+	requireGit(t)
+	t.Setenv("LC_ALL", "C")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	base, repoRoot := linkFixture(t)
 	const body = "canonical shared agent\n"
 	globalAgent(t, repoRoot, "shared", body)
 	path := projectAgentPath(base, "proj", "shared")
 	mustWriteT(t, path, body)
-	mustWriteT(t, filepath.Join(base, "proj", ".git"), "gitdir: /nonexistent-agentsync-test\n")
+	project := filepath.Join(base, "proj")
+	commitRepo(t, project)
+	testfs.DubiousOwnership(t, project)
 
-	code, stdout, stderr := runCLI(t, linkArgs(t, repoRoot, base, "--apply")...)
-	if code != exitAtRisk {
-		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
+	args := linkArgs(t, repoRoot, base, "--apply")
+	for _, jsonOutput := range []bool{false, true} {
+		runArgs := args
+		if jsonOutput {
+			runArgs = append(args, "--json")
+		}
+		code, stdout, stderr := runCLI(t, runArgs...)
+		if code != exitAtRisk {
+			t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, exitAtRisk, stdout, stderr)
+		}
+		reason := stdout
+		if jsonOutput {
+			var report linkReport
+			if err := json.Unmarshal([]byte(stdout), &report); err != nil || len(report.Blocked) != 1 {
+				t.Fatalf("expected one blocked project, got %+v (%v)\n%s", report.Blocked, err, stdout)
+			}
+			reason = report.Blocked[0].Reason
+		} else if !strings.Contains(stdout, "blocked") {
+			t.Errorf("the report does not say the project was refused:\n%s", stdout)
+		}
+		if !strings.Contains(reason, "Git reported: fatal: detected dubious ownership") {
+			t.Errorf("the refusal does not name the Git failure:\n%s", reason)
+		}
+		assertIsRegular(t, path, "a project whose git could not be asked must not be linked into")
+		if got := readFileT(t, path); got != body {
+			t.Errorf("project file was changed to %q", got)
+		}
 	}
-	if !strings.Contains(stdout, "blocked") {
-		t.Errorf("the report does not say the project was refused:\n%s", stdout)
-	}
-	assertIsRegular(t, path, "a project whose git could not be asked must not be linked into")
 }
 
 // --- the home guard ---------------------------------------------------------
