@@ -499,13 +499,18 @@ func judgeDest(item Item, opts Options) (verdict, error) {
 // a corrupt object store, no repository at all — then lands on the refusing side
 // without any call site remembering to handle it.
 func commitGate(dest string) (Refusal, string) {
-	switch scan.CommittedInHEAD(dest) {
+	committed, diagnostic := scan.CommittedInHEADWithDiagnostic(dest)
+	switch committed {
 	case scan.CommittedYes:
 		return RefusalNone, ""
 	case scan.CommittedNo:
 		return RefusalUncommitted, "the captured copy's current bytes are in no commit — it is untracked, or it has been edited since it was last committed — so replacing it would leave them nowhere at all; commit project-agents/ first, then re-run"
 	default:
-		return RefusalCommitUnknown, "git could not say whether the captured copy's current bytes are committed, and an unanswered question is not permission to replace what may be the only copy"
+		reason := "git could not say whether the captured copy's current bytes are committed, and an unanswered question is not permission to replace what may be the only copy"
+		if diagnostic != "" {
+			reason += ". Git reported: " + diagnostic
+		}
+		return RefusalCommitUnknown, reason
 	}
 }
 
